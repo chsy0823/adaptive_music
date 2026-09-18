@@ -39,7 +39,13 @@ class FakeBackend implements AudioBackend {
   }
 
   @override
-  void lowPass(LowPassFilter? filter, Duration transition) {}
+  void setFilter(MusicFilter? filter, Duration transition) {
+    lastFilter = filter;
+    filterTransition = transition;
+  }
+
+  MusicFilter? lastFilter;
+  Duration? filterTransition;
   @override
   Future<void> clear() async {
     starts.clear();
@@ -54,6 +60,38 @@ class FakeBackend implements AudioBackend {
 }
 
 void main() {
+  test(
+    'shelf selection, retarget and clear preserve requested fades',
+    () async {
+      final backend = FakeBackend();
+      final player = AdaptiveMusicPlayer.withBackend(
+        backend,
+        automaticTick: false,
+      );
+      await player.load(tracks: const [MusicTrack.asset('a')]);
+      const shelf = HighShelfFilter(frequencyHz: 2000, gainDb: -6);
+      player.setFilter(shelf);
+      expect(backend.lastFilter, same(shelf));
+      expect(backend.filterTransition, const Duration(milliseconds: 700));
+      player.setFilter(
+        const HighShelfFilter(gainDb: -12),
+        transition: Duration.zero,
+      );
+      expect(backend.filterTransition, Duration.zero);
+      for (final invalid in [
+        const HighShelfFilter(frequencyHz: 0),
+        const HighShelfFilter(frequencyHz: double.nan),
+        const HighShelfFilter(gainDb: double.infinity),
+        const HighShelfFilter(gainDb: -25),
+        const HighShelfFilter(gainDb: 13),
+      ]) {
+        expect(() => player.setFilter(invalid), throwsArgumentError);
+      }
+      player.clearFilter();
+      expect(backend.lastFilter, isNull);
+      await player.dispose();
+    },
+  );
   test('pre-schedules the next track before the current track ends', () async {
     final backend = FakeBackend();
     final player = AdaptiveMusicPlayer.withBackend(

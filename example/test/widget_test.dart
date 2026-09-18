@@ -8,9 +8,14 @@ void main() {
   ) async {
     await tester.pumpWidget(const MusicLabApp(autoLoad: false));
     expect(find.text('Adaptive Music Lab'), findsOneWidget);
-    expect(find.text('Low-pass filter'), findsOneWidget);
+    expect(find.text('High-shelf'), findsOneWidget);
     expect(find.text('Smooth controls'), findsOneWidget);
     expect(find.text('Open audio'), findsOneWidget);
+    await tester.ensureVisible(find.text('High-shelf'));
+    await tester.tap(find.text('High-shelf'));
+    await tester.pump();
+    expect(find.text('Treble gain'), findsOneWidget);
+    expect(find.text('-6.0 dB'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
   });

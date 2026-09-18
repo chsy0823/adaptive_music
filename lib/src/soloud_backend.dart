@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:http/http.dart' as http;
@@ -9,14 +10,13 @@ import 'models.dart';
 class SoloudBackend implements AudioBackend {
   static int _serial = 0;
   static Future<void>? _initializing;
-  final _engine = SoLoud.instance;
+  late final _engine = SoLoud.instance;
   final _sources = <int, AudioSource>{};
   final _voices = <int, SoundHandle>{};
   Bus? _bus;
   bool _filterActive = false;
   @override
-  int get now =>
-      _engine.isInitialized ? _engine.getEngineTime().inMicroseconds : 0;
+  int get now => _bus != null ? _engine.getEngineTime().inMicroseconds : 0;
   @override
   Future<void> initialize() async {
     if (!_engine.isInitialized) {
@@ -29,6 +29,14 @@ class SoloudBackend implements AudioBackend {
     if (_bus == null) {
       _bus = _engine.createMixingBus(name: 'adaptive_music_${_serial++}');
       _bus!.playOnEngine();
+      // Keep the STFT path present from startup to avoid a latency jump when
+      // changing filter type. Unity gains leave the spectrum unchanged.
+      final shelf = _bus!.filters.parametricEqFilter;
+      shelf.activate();
+      shelf.numBands().value = 64;
+      for (var i = 0; i < 64; i++) {
+        shelf.bandGain(i).value = 1;
+      }
     }
   }
 
@@ -100,7 +108,27 @@ class SoloudBackend implements AudioBackend {
   }
 
   @override
-  void lowPass(LowPassFilter? settings, Duration transition) {
+  void setFilter(MusicFilter? settings, Duration transition) {
+    _lowPass(settings is LowPassFilter ? settings : null, transition);
+    final shelf = _bus!.filters.parametricEqFilter;
+    for (var i = 0; i < 64; i++) {
+      var gain = 1.0;
+      if (settings is HighShelfFilter) {
+        final frequency = shelf.bandFrequency(i);
+        final x = (math.log(frequency / settings.frequencyHz) / math.ln2 + 0.5)
+            .clamp(0.0, 1.0);
+        final blend = x * x * (3 - 2 * x);
+        gain = math.pow(10, settings.gainDb * blend / 20).toDouble();
+      }
+      if (transition == Duration.zero) {
+        shelf.bandGain(i).value = gain;
+      } else {
+        shelf.bandGain(i).fadeFilterParameter(to: gain, time: transition);
+      }
+    }
+  }
+
+  void _lowPass(LowPassFilter? settings, Duration transition) {
     final filter = _bus!.filters.biquadFilter;
     if (!_filterActive) {
       if (settings == null) return;
