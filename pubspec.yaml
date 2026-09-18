@@ -1,0 +1,19 @@
+name: adaptive_music
+description: Smooth adaptive music playback with playlists, crossfades, looping and real-time low-pass filtering.
+version: 0.1.0
+repository: https://github.com/chsy0823/adaptive_music
+
+environment:
+  sdk: ">=3.11.0 <4.0.0"
+  flutter: ">=3.41.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_soloud: ^4.1.7
+  http: ^1.6.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0

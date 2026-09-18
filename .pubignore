@@ -1,0 +1,6 @@
+.github/
+test/
+tool/
+example/build/
+example/.dart_tool/
+example/integration_test/
