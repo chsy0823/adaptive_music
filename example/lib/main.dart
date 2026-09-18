@@ -57,7 +57,9 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
   double _crossfade = 3;
   double _cutoff = 1200;
   bool _smooth = true;
-  bool _filtered = false;
+  String _filterType = 'Off';
+  double _shelfFrequency = 2000;
+  double _shelfGain = -6;
   bool _busy = false;
   String? _error;
 
@@ -121,16 +123,28 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
               ),
       );
       _player.setVolume(_volume, transition: Duration.zero);
-      if (_filtered) {
-        _player.setFilter(
-          LowPassFilter(cutoffHz: _cutoff),
-          transition: Duration.zero,
-        );
-      }
+      _applyFilter(Duration.zero);
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  void _applyFilter(Duration duration) {
+    switch (_filterType) {
+      case 'Low-pass':
+        _player.setFilter(
+          LowPassFilter(cutoffHz: _cutoff),
+          transition: duration,
+        );
+      case 'High-shelf':
+        _player.setFilter(
+          HighShelfFilter(frequencyHz: _shelfFrequency, gainDb: _shelfGain),
+          transition: duration,
+        );
+      default:
+        _player.clearFilter(transition: duration);
     }
   }
 
@@ -440,43 +454,65 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
         _command(() => _player.setVolume(v, transition: _duration));
       }),
       const Divider(height: 30),
-      SwitchListTile.adaptive(
-        contentPadding: EdgeInsets.zero,
-        title: const Text('Low-pass filter'),
-        subtitle: const Text('Soften the high frequencies'),
-        value: _filtered,
-        onChanged: !_ready
-            ? null
-            : (v) {
-                setState(() => _filtered = v);
-                _command(
-                  () => v
-                      ? _player.setFilter(
-                          LowPassFilter(cutoffHz: _cutoff),
-                          transition: _duration,
-                        )
-                      : _player.clearFilter(transition: _duration),
-                );
-              },
-      ),
-      _slider(
-        'Cutoff',
-        '${_cutoff.round()} Hz',
-        math.log(_cutoff),
-        math.log(100),
-        math.log(16000),
-        (v) {
-          setState(() => _cutoff = math.exp(v));
-          if (_filtered && _ready) {
-            _command(
-              () => _player.setFilter(
-                LowPassFilter(cutoffHz: _cutoff),
-                transition: _duration,
-              ),
-            );
-          }
+      const Text('Tone filter'),
+      const SizedBox(height: 8),
+      SegmentedButton<String>(
+        segments: const [
+          ButtonSegment(value: 'Off', label: Text('Off')),
+          ButtonSegment(value: 'Low-pass', label: Text('Low-pass')),
+          ButtonSegment(value: 'High-shelf', label: Text('High-shelf')),
+        ],
+        selected: {_filterType},
+        showSelectedIcon: false,
+        onSelectionChanged: (value) {
+          setState(() => _filterType = value.single);
+          if (_ready) _command(() => _applyFilter(_duration));
         },
       ),
+      const SizedBox(height: 12),
+      Text(
+        _filterType == 'High-shelf'
+            ? 'Reduce brightness while keeping the upper frequencies audible.'
+            : _filterType == 'Low-pass'
+            ? 'Progressively remove frequencies above the cutoff.'
+            : 'Original tone. Choose a filter to compare.',
+      ),
+      if (_filterType == 'Low-pass')
+        _slider(
+          'Cutoff',
+          '${_cutoff.round()} Hz',
+          math.log(_cutoff),
+          math.log(100),
+          math.log(16000),
+          (v) {
+            setState(() => _cutoff = math.exp(v));
+            if (_ready) _command(() => _applyFilter(_duration));
+          },
+        ),
+      if (_filterType == 'High-shelf') ...[
+        _slider(
+          'Shelf frequency',
+          '${_shelfFrequency.round()} Hz',
+          math.log(_shelfFrequency),
+          math.log(100),
+          math.log(8000),
+          (v) {
+            setState(() => _shelfFrequency = math.exp(v).clamp(100, 8000));
+            if (_ready) _command(() => _applyFilter(_duration));
+          },
+        ),
+        _slider(
+          'Treble gain',
+          '${_shelfGain.toStringAsFixed(1)} dB',
+          _shelfGain,
+          -24,
+          12,
+          (v) {
+            setState(() => _shelfGain = v);
+            if (_ready) _command(() => _applyFilter(_duration));
+          },
+        ),
+      ],
       const Divider(height: 30),
       SwitchListTile.adaptive(
         contentPadding: EdgeInsets.zero,

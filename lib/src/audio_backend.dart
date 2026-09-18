@@ -9,7 +9,7 @@ abstract interface class AudioBackend {
   void gain(int voice, double value, Duration smoothing);
   void pause(int voice, bool paused);
   Future<void> stop(int voice);
-  void lowPass(LowPassFilter? filter, Duration transition);
+  void setFilter(MusicFilter? filter, Duration transition);
   Future<void> clear();
   Future<void> dispose();
 }

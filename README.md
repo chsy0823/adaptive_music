@@ -2,7 +2,7 @@
 
 A Flutter music player for games and interactive apps. Keep music moving while
 changing its volume and tone: playlists, gapless scheduling, crossfades, smooth
-pause/resume, and real-time low-pass filtering.
+pause/resume, and real-time low-pass and high-shelf filtering.
 
 Built on [flutter_soloud](https://pub.dev/packages/flutter_soloud). The package
 contains no exercise, scene, or game-state concepts.
@@ -68,7 +68,8 @@ await music.load(
 music.play(); // Resume; initially starts the first track.
 music.setVolume(0.4); // Retarget from the current audible level.
 music.setFilter(const LowPassFilter(cutoffHz: 1200));
-music.clearFilter(); // Smooth wet/dry transition back to the original audio.
+music.setFilter(const HighShelfFilter(frequencyHz: 2000, gainDb: -6));
+music.clearFilter(); // Smooth transition back to the original tone.
 music.pause(); // Fade out, then freeze the overlapping voices and timeline.
 music.play(); // Resume the same overlap and fade back to the user's volume.
 music.play(start: PlaybackStart.restartTrack);
@@ -129,11 +130,24 @@ load and is idempotent.
 
 ## DSP and continuity
 
-Each player has its own mixing bus. Low-pass settings affect its overlapping and
-future tracks, without filtering other players. Cutoff accepts 10–16000 Hz and
-resonance 0.1–20. Filter removal smoothly reduces the wet contribution to zero;
-the bypassed filter stays allocated until player disposal so rapid toggles are
-safe. Low-pass is the only exposed filter in this first version.
+Each player has its own mixing bus. `setFilter` selects one filter, replacing the
+previous type; settings affect overlapping and future tracks without filtering
+other players. Parameters and filter removal use the configured filter fade.
+
+- `LowPassFilter`: cutoff 10–16000 Hz, resonance 0.1–20.
+- `HighShelfFilter`: center frequency 100–8000 Hz, gain −24 to +12 dB.
+  Defaults: 2000 Hz, −6 dB. Negative gain reduces treble to a plateau while
+  retaining bass. Positive gain needs additional volume headroom.
+
+The shelf is a spectral approximation using the native engine's 64-band STFT EQ,
+with a smooth one-octave transition centered on the selected frequency. It is not
+an RBJ biquad shelf. The 1024-sample STFT path stays active at unity gain even
+with filters off, adding processing latency and CPU cost but avoiding a latency
+change when switching filters. Low-pass wet/dry blending and shelf band-gain
+interpolation run natively. Filter objects stay allocated until player disposal.
+
+In the lab, compare **Off / Low-pass / High-shelf** on the same playing track.
+Start with the shelf at **2 kHz / −6 dB**, then compare −3, −9 and −12 dB.
 
 Sources are fully decoded into memory during `load` to avoid network or decoder
 work at a transition. Budget memory accordingly: stereo float PCM uses roughly
@@ -182,10 +196,15 @@ flutter build macos --debug
 
 The native test plays low-volume synthetic tones. It checks non-silent windows
 across crossfade and gapless boundaries, pause/resume, and attenuation/restoration
-of a 6 kHz tone with a 500 Hz low-pass filter. It is a signal-level regression
+of a 6 kHz tone with a 500 Hz low-pass filter, high-shelf attenuation at
+−6/−12 dB, filter replacement, and preservation of a 600 Hz tone. It is a signal-level regression
 test, not a substitute for listening on supported physical devices.
 
 ## License
 
 MIT, including the original generated demo audio. Dependencies retain their own
 licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution and review workflow.

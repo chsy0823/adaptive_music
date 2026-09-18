@@ -65,11 +65,24 @@ class TransitionDefaults {
   final Duration filter;
 }
 
+/// Tone processing selected for a player and all its tracks.
+sealed class MusicFilter {
+  const MusicFilter();
+}
+
 /// A resonant low-pass filter. Cutoff is in Hz; resonance is the engine's Q.
-class LowPassFilter {
+class LowPassFilter extends MusicFilter {
   const LowPassFilter({this.cutoffHz = 1200, this.resonance = 0.707});
   final double cutoffHz;
   final double resonance;
+}
+
+/// A spectral high shelf with a one-octave transition around [frequencyHz].
+/// Positive gain boosts treble; negative gain softens it without removing it.
+class HighShelfFilter extends MusicFilter {
+  const HighShelfFilter({this.frequencyHz = 2000, this.gainDb = -6});
+  final double frequencyHz;
+  final double gainDb;
 }
 
 /// Immutable playback state. During overlap [index] is the incoming track.

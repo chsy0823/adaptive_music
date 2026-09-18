@@ -155,11 +155,49 @@ void main() {
           lessThan(dry * 0.2),
           reason: 'Low-pass should attenuate the 6 kHz tone',
         );
+        // Replace low-pass rather than leaving both filters active.
+        player.setFilter(
+          const HighShelfFilter(frequencyHz: 2000, gainDb: -12),
+          transition: const Duration(milliseconds: 150),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        samples.clear();
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        expect(rms(samples) / dry, closeTo(0.251, 0.06));
+        player.setFilter(
+          const HighShelfFilter(gainDb: -6),
+          transition: const Duration(milliseconds: 150),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        samples.clear();
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        expect(rms(samples) / dry, closeTo(0.501, 0.07));
         player.clearFilter(transition: const Duration(milliseconds: 150));
         await Future<void>.delayed(const Duration(milliseconds: 350));
         samples.clear();
         await Future<void>.delayed(const Duration(milliseconds: 350));
         expect(rms(samples), greaterThan(dry * 0.8));
+        await player.load(
+          tracks: [MusicTrack.file(a.path)],
+          repeat: MusicRepeatMode.one,
+        );
+        player.play();
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        samples.clear();
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        final bassDry = rms(samples);
+        player.setFilter(
+          const HighShelfFilter(gainDb: -12),
+          transition: Duration.zero,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+        samples.clear();
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        expect(
+          rms(samples) / bassDry,
+          closeTo(1, 0.1),
+          reason: 'Shelf should preserve the 600 Hz tone',
+        );
       } finally {
         SoLoud.instance.stopMixerOutputStream();
         await capture?.cancel();

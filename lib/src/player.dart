@@ -193,27 +193,39 @@ class AdaptiveMusicPlayer {
     _emit();
   }
 
-  /// Applies or retargets the player's low-pass filter, including future tracks.
-  void setFilter(LowPassFilter filter, {Duration? transition}) {
+  /// Applies or retargets the player's filter, including future tracks.
+  void setFilter(MusicFilter filter, {Duration? transition}) {
     _checkReady();
-    if (!filter.cutoffHz.isFinite ||
-        filter.cutoffHz < 10 ||
-        filter.cutoffHz > 16000 ||
-        !filter.resonance.isFinite ||
-        filter.resonance < 0.1 ||
-        filter.resonance > 20) {
+    if (filter is LowPassFilter &&
+        (!filter.cutoffHz.isFinite ||
+            filter.cutoffHz < 10 ||
+            filter.cutoffHz > 16000 ||
+            !filter.resonance.isFinite ||
+            filter.resonance < 0.1 ||
+            filter.resonance > 20)) {
       throw ArgumentError('Cutoff must be 10..16000 Hz and resonance 0.1..20.');
+    }
+    if (filter is HighShelfFilter &&
+        (!filter.frequencyHz.isFinite ||
+            filter.frequencyHz < 100 ||
+            filter.frequencyHz > 8000 ||
+            !filter.gainDb.isFinite ||
+            filter.gainDb < -24 ||
+            filter.gainDb > 12)) {
+      throw ArgumentError(
+        'Shelf frequency must be 100..8000 Hz and gain -24..12 dB.',
+      );
     }
     final fade = transition ?? transitions.filter;
     _validateDuration(fade);
-    _backend.lowPass(filter, fade);
+    _backend.setFilter(filter, fade);
   }
 
   void clearFilter({Duration? transition}) {
     _checkReady();
     final fade = transition ?? transitions.filter;
     _validateDuration(fade);
-    _backend.lowPass(null, fade);
+    _backend.setFilter(null, fade);
   }
 
   /// Manually transitions to another track using the playlist's transition.

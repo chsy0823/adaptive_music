@@ -1,3 +1,10 @@
+## Unreleased
+
+- High-shelf filtering with smooth frequency/gain changes and native output tests.
+- Listening lab comparison of original, low-pass and high-shelf tone.
+- Lazy native-engine initialization so unloaded widgets work in headless tests.
+- Contributor guide and code ownership.
+
 ## 0.1.0
 
 - Single-track and playlist playback, resume/restart, and repeat modes.
