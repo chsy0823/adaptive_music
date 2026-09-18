@@ -3,14 +3,32 @@ enum TrackSource { asset, file, url }
 
 /// One music file. URLs are fully downloaded during load, before playback.
 class MusicTrack {
-  const MusicTrack.asset(this.location, {this.title})
-    : source = TrackSource.asset;
-  const MusicTrack.file(this.location, {this.title})
-    : source = TrackSource.file;
-  const MusicTrack.url(this.location, {this.title}) : source = TrackSource.url;
+  const MusicTrack.asset(
+    this.location, {
+    this.title,
+    this.cueIn = Duration.zero,
+    this.cueOut,
+  }) : source = TrackSource.asset;
+  const MusicTrack.file(
+    this.location, {
+    this.title,
+    this.cueIn = Duration.zero,
+    this.cueOut,
+  }) : source = TrackSource.file;
+  const MusicTrack.url(
+    this.location, {
+    this.title,
+    this.cueIn = Duration.zero,
+    this.cueOut,
+  }) : source = TrackSource.url;
   final String location;
   final String? title;
   final TrackSource source;
+
+  /// Inclusive start and exclusive end in the source file. Null end uses EOF.
+  /// The selected window must fit the decoded file and be at least 100 ms.
+  final Duration cueIn;
+  final Duration? cueOut;
 }
 
 enum MusicRepeatMode { none, one, all }

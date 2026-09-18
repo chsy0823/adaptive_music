@@ -208,3 +208,26 @@ licenses; see [THIRD_PARTY.md](THIRD_PARTY.md).
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution and review workflow.
+
+## Cue windows and foreground audio
+
+`MusicTrack.asset/file/url` accepts `cueIn` (default zero) and `cueOut`
+(default end of file). Positions and durations describe this selected window.
+Use these to exclude silent intros/outros without changing source files.
+The window must fit the decoded file and last at least 100 ms. Crossfades
+are scheduled relative to its end, including playlist repeat boundaries.
+
+```dart
+final narration = player.requestDucking(gain: 0.45, priority: 1);
+try {
+  await playNarrationToCompletion(); // supplied by the host application
+} finally {
+  player.releaseDucking(narration);
+}
+```
+
+Ducking multiplies the current user volume; it never overwrites `setVolume`.
+The highest active priority wins; requests at the same priority use the lowest
+gain. Release is idempotent. Attack defaults to 150 ms and release to 700 ms;
+both accept a `transition` override. Hosts release on completion, cancellation,
+or failure. Sounds that should not duck music simply make no request.

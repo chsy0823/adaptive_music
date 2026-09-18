@@ -66,16 +66,23 @@ class SoloudBackend implements AudioBackend {
   }
 
   @override
-  int schedule(int index, int engineTime) {
+  int schedule(
+    int index,
+    int engineTime, {
+    Duration offset = Duration.zero,
+    Duration duration = Duration.zero,
+  }) {
     final voice = _engine.playScheduled(
       _sources[index]!,
       Duration(microseconds: engineTime),
+      duration: duration,
       busId: _bus!.busId,
       volume: 0,
     );
     if (voice.id == 0) {
       throw StateError('Audio engine could not start a voice.');
     }
+    if (offset > Duration.zero) _engine.seek(voice, offset);
     _engine.setInaudibleBehavior(voice, true, false);
     _engine.setProtectVoice(voice, true);
     _voices[voice.id] = voice;

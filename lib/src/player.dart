@@ -46,6 +46,8 @@ class AdaptiveMusicPlayer {
   final _events = StreamController<MusicState>.broadcast();
   final _volume = Envelope(1);
   final _transport = Envelope(0);
+  final _duck = Envelope(1);
+  final _ducks = <Object, ({int priority, double gain})>{};
   final _clips = <_Clip>[];
   List<MusicTrack> _tracks = [];
   List<int> _lengths = [];
@@ -111,7 +113,16 @@ class AdaptiveMusicPlayer {
         if (length < const Duration(milliseconds: 100)) {
           throw ArgumentError('Tracks must be at least 100 ms long.');
         }
-        lengths.add(length.inMicroseconds);
+        final track = tracks[i];
+        final end = track.cueOut ?? length;
+        if (track.cueIn.isNegative ||
+            end > length ||
+            end - track.cueIn < const Duration(milliseconds: 100)) {
+          throw ArgumentError(
+            'Cue window must fit the file and be at least 100 ms.',
+          );
+        }
+        lengths.add((end - track.cueIn).inMicroseconds);
       }
       if (_disposed) return;
       _tracks = tracks;
@@ -191,6 +202,48 @@ class AdaptiveMusicPlayer {
     _validateDuration(fade);
     _volume.moveTo(value, _backend.now, fade.inMicroseconds);
     _emit();
+  }
+
+  /// Temporarily attenuates music independently of its user volume.
+  /// Highest priority wins; equal priorities use the lowest requested gain.
+  /// Keep the returned token until the foreground sound completes or is cancelled.
+  Object requestDucking({
+    double gain = 0.35,
+    int priority = 0,
+    Duration transition = const Duration(milliseconds: 150),
+  }) {
+    _checkAlive();
+    if (!gain.isFinite || gain < 0 || gain > 1) {
+      throw ArgumentError.value(gain, 'gain', 'Expected 0..1');
+    }
+    _validateDuration(transition);
+    final token = Object();
+    _ducks[token] = (priority: priority, gain: gain);
+    _updateDucking(transition);
+    return token;
+  }
+
+  /// Idempotent release. Music returns to the current user volume only when
+  /// no remaining request attenuates it. Retargets from the current gain.
+  void releaseDucking(
+    Object token, {
+    Duration transition = const Duration(milliseconds: 700),
+  }) {
+    if (_disposed) return;
+    _validateDuration(transition);
+    if (_ducks.remove(token) != null) _updateDucking(transition);
+  }
+
+  void _updateDucking(Duration transition) {
+    var gain = 1.0;
+    if (_ducks.isNotEmpty) {
+      final priority = _ducks.values.map((d) => d.priority).reduce(math.max);
+      gain = _ducks.values
+          .where((d) => d.priority == priority)
+          .map((d) => d.gain)
+          .reduce(math.min);
+    }
+    _duck.moveTo(gain, _backend.now, transition.inMicroseconds);
   }
 
   /// Applies or retargets the player's filter, including future tracks.
@@ -308,13 +361,19 @@ class AdaptiveMusicPlayer {
       _clips.add(_Clip(next, start, start + _lengths[next], fadeIn: overlap));
     }
     for (final clip in _clips) {
-      clip.voice ??= _backend.schedule(clip.index, _origin + clip.start);
+      clip.voice ??= _backend.schedule(
+        clip.index,
+        _origin + clip.start,
+        offset: _tracks[clip.index].cueIn,
+        duration: Duration(microseconds: _lengths[clip.index]),
+      );
       // Future gapless voices must start at their audible gain without waiting
       // for a Dart tick. Crossfades begin at zero and are smoothed natively.
       final sampleTime = math.max(time, clip.start);
       final gain =
           clip.gain(sampleTime, _transition.curve) *
           _volume.at(_backend.now) *
+          _duck.at(_backend.now) *
           _transport.at(_backend.now);
       _backend.gain(
         clip.voice!,
@@ -432,6 +491,7 @@ class AdaptiveMusicPlayer {
   Future<void> _dispose() async {
     _disposed = true;
     _timer?.cancel();
+    _ducks.clear();
     try {
       await _loading;
     } catch (_) {

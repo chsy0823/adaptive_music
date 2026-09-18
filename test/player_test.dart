@@ -7,6 +7,7 @@ class FakeBackend implements AudioBackend {
   @override
   int now = 0;
   final starts = <int, (int, int)>{};
+  final windows = <int, (Duration, Duration)>{};
   final gains = <int, double>{};
   final paused = <int>{};
   int counter = 0;
@@ -16,8 +17,14 @@ class FakeBackend implements AudioBackend {
   Future<Duration> load(MusicTrack track, int index) async =>
       const Duration(seconds: 10);
   @override
-  int schedule(int index, int engineTime) {
+  int schedule(
+    int index,
+    int engineTime, {
+    Duration offset = Duration.zero,
+    Duration duration = Duration.zero,
+  }) {
     starts[++counter] = (index, engineTime);
+    windows[counter] = (offset, duration);
     return counter;
   }
 
@@ -60,6 +67,125 @@ class FakeBackend implements AudioBackend {
 }
 
 void main() {
+  test('cue windows outside the source are rejected', () async {
+    for (final track in [
+      const MusicTrack.asset('a', cueIn: Duration(seconds: -1)),
+      const MusicTrack.asset('a', cueOut: Duration(seconds: 11)),
+      const MusicTrack.asset(
+        'a',
+        cueIn: Duration(seconds: 5),
+        cueOut: Duration(seconds: 4),
+      ),
+    ]) {
+      final player = AdaptiveMusicPlayer.withBackend(
+        FakeBackend(),
+        automaticTick: false,
+      );
+      await expectLater(player.load(tracks: [track]), throwsArgumentError);
+      await player.dispose();
+    }
+  });
+  test(
+    'duck fades retarget and tied requests restore the remaining gain',
+    () async {
+      final backend = FakeBackend();
+      final player = AdaptiveMusicPlayer.withBackend(
+        backend,
+        automaticTick: false,
+        transitions: const TransitionDefaults.immediate(),
+      );
+      await player.load(tracks: const [MusicTrack.asset('a')]);
+      player.play();
+      final a = player.requestDucking(
+        gain: 0.4,
+        transition: const Duration(seconds: 1),
+      );
+      backend.now = 500000;
+      player.tick();
+      expect(backend.gains[1], closeTo(0.7, 0.001));
+      final b = player.requestDucking(gain: 0.2, transition: Duration.zero);
+      player.tick();
+      expect(backend.gains[1], closeTo(0.2, 0.001));
+      player.releaseDucking(b, transition: Duration.zero);
+      player.tick();
+      expect(backend.gains[1], closeTo(0.4, 0.001));
+      player.releaseDucking(a, transition: const Duration(seconds: 1));
+      backend.now = 1000000;
+      player.tick();
+      expect(backend.gains[1], closeTo(0.7, 0.001));
+      await player.dispose();
+    },
+  );
+
+  test(
+    'overlapping priorities duck without changing the user volume',
+    () async {
+      final backend = FakeBackend();
+      final player = AdaptiveMusicPlayer.withBackend(
+        backend,
+        automaticTick: false,
+        transitions: const TransitionDefaults.immediate(),
+      );
+      await player.load(tracks: const [MusicTrack.asset('a')]);
+      player.setVolume(0.8);
+      player.play();
+      final first = player.requestDucking(gain: 0.5, transition: Duration.zero);
+      final second = player.requestDucking(
+        gain: 0.25,
+        priority: 1,
+        transition: Duration.zero,
+      );
+      player.tick();
+      expect(backend.gains[1], closeTo(0.2, 0.001));
+      player.releaseDucking(first, transition: Duration.zero);
+      player.setVolume(0.6);
+      player.tick();
+      expect(backend.gains[1], closeTo(0.15, 0.001));
+      player.releaseDucking(second, transition: Duration.zero);
+      player.tick();
+      expect(backend.gains[1], closeTo(0.6, 0.001));
+      player.releaseDucking(second);
+      await player.dispose();
+    },
+  );
+
+  test('cue window schedules overlap before trailing silence', () async {
+    final backend = FakeBackend();
+    final player = AdaptiveMusicPlayer.withBackend(
+      backend,
+      automaticTick: false,
+      transitions: const TransitionDefaults.immediate(),
+    );
+    await player.load(
+      tracks: const [
+        MusicTrack.asset(
+          'a',
+          cueIn: Duration(seconds: 1),
+          cueOut: Duration(seconds: 7),
+        ),
+        MusicTrack.asset('b'),
+      ],
+      transition: const TrackTransition.crossfade(
+        duration: Duration(seconds: 2),
+      ),
+    );
+    player.play();
+    final starts = backend.starts.values.toList();
+    expect(starts[1].$2 - starts[0].$2, 4000000);
+    expect(backend.windows[1], (
+      const Duration(seconds: 1),
+      const Duration(seconds: 6),
+    ));
+    backend.now = 5000000;
+    player.tick();
+    expect(backend.gains.values.where((g) => g > 0), hasLength(2));
+    expect(
+      backend.gains.values.fold<double>(0, (sum, g) => sum + g * g),
+      closeTo(1, 0.001),
+    );
+    await player.dispose();
+  });
+
   test(
     'shelf selection, retarget and clear preserve requested fades',
     () async {

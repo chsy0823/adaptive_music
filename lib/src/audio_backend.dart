@@ -5,7 +5,12 @@ abstract interface class AudioBackend {
   Future<void> initialize();
   int get now;
   Future<Duration> load(MusicTrack track, int index);
-  int schedule(int index, int engineTime);
+  int schedule(
+    int index,
+    int engineTime, {
+    Duration offset = Duration.zero,
+    Duration duration = Duration.zero,
+  });
   void gain(int voice, double value, Duration smoothing);
   void pause(int voice, bool paused);
   Future<void> stop(int voice);
