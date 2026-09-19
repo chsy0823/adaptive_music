@@ -3,6 +3,9 @@
 Adaptive Music is a general-purpose Flutter music/DSP library. Keep exercise,
 game-state and other application policy in host apps.
 
+For AI-assisted contributions, start with [AGENTS.md](AGENTS.md).
+`CLAUDE.md` imports the same guide so the instructions have one source.
+
 ## Propose a change
 
 Open an issue for substantial API or architecture changes. For a focused fix,
