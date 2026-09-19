@@ -9,7 +9,14 @@ import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 
-Future<File> tone(Directory dir, String name, double hz, int seconds) async {
+Future<File> tone(
+  Directory dir,
+  String name,
+  double hz,
+  int seconds, {
+  double audibleFrom = 0,
+  double? audibleUntil,
+}) async {
   const rate = 44100;
   final count = rate * seconds;
   final bytes = ByteData(44 + count * 2);
@@ -34,7 +41,9 @@ Future<File> tone(Directory dir, String name, double hz, int seconds) async {
   for (var i = 0; i < count; i++) {
     bytes.setInt16(
       44 + i * 2,
-      (8000 * math.sin(2 * math.pi * hz * i / rate)).round(),
+      i / rate < audibleFrom || i / rate >= (audibleUntil ?? seconds)
+          ? 0
+          : (8000 * math.sin(2 * math.pi * hz * i / rate)).round(),
       Endian.little,
     );
   }
@@ -61,6 +70,14 @@ void main() {
         'adaptive_music_test_',
       );
       final a = await tone(directory, 'a', 600, 2);
+      final cued = await tone(
+        directory,
+        'cued',
+        600,
+        4,
+        audibleFrom: 1,
+        audibleUntil: 2.5,
+      );
       final b = await tone(directory, 'b', 900, 2);
       final high = await tone(directory, 'high', 6000, 8);
       final player = AdaptiveMusicPlayer(
@@ -70,7 +87,14 @@ void main() {
       StreamSubscription<Uint8List>? capture;
       try {
         await player.load(
-          tracks: [MusicTrack.file(a.path), MusicTrack.file(b.path)],
+          tracks: [
+            MusicTrack.file(
+              cued.path,
+              cueIn: const Duration(seconds: 1),
+              cueOut: const Duration(milliseconds: 2500),
+            ),
+            MusicTrack.file(b.path),
+          ],
           repeat: MusicRepeatMode.all,
           transition: const TrackTransition.crossfade(
             duration: Duration(milliseconds: 500),
@@ -115,7 +139,14 @@ void main() {
         expect(rms(samples), greaterThan(0.002));
 
         await player.load(
-          tracks: [MusicTrack.file(a.path), MusicTrack.file(b.path)],
+          tracks: [
+            MusicTrack.file(
+              cued.path,
+              cueIn: const Duration(seconds: 1),
+              cueOut: const Duration(milliseconds: 2500),
+            ),
+            MusicTrack.file(b.path),
+          ],
           transition: const TrackTransition.gapless(),
         );
         samples.clear();
@@ -198,6 +229,23 @@ void main() {
           closeTo(1, 0.1),
           reason: 'Shelf should preserve the 600 Hz tone',
         );
+        await player.load(tracks: [MusicTrack.file(high.path)]);
+        player.clearFilter(transition: Duration.zero);
+        player.play();
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        samples.clear();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        final speechDry = rms(samples);
+        final speech = player.requestDucking(gain: 0.4);
+        await Future<void>.delayed(const Duration(milliseconds: 350));
+        samples.clear();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        expect(rms(samples) / speechDry, closeTo(0.4, 0.08));
+        player.releaseDucking(speech);
+        await Future<void>.delayed(const Duration(milliseconds: 900));
+        samples.clear();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        expect(rms(samples) / speechDry, closeTo(1, 0.1));
       } finally {
         SoLoud.instance.stopMixerOutputStream();
         await capture?.cancel();

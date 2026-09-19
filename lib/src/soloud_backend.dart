@@ -5,6 +5,8 @@ import 'package:flutter_soloud/flutter_soloud.dart';
 import 'package:http/http.dart' as http;
 import 'audio_backend.dart';
 import 'models.dart';
+import 'envelope.dart';
+import 'gain_worker.dart';
 
 /// Each player owns a bus and uniquely named sources, never global filters.
 class SoloudBackend implements AudioBackend {
@@ -14,6 +16,7 @@ class SoloudBackend implements AudioBackend {
   final _sources = <int, AudioSource>{};
   final _voices = <int, SoundHandle>{};
   Bus? _bus;
+  GainWorker? _gains;
   bool _filterActive = false;
   @override
   int get now => _bus != null ? _engine.getEngineTime().inMicroseconds : 0;
@@ -26,6 +29,7 @@ class SoloudBackend implements AudioBackend {
         _initializing = null;
       }
     }
+    _gains ??= await GainWorker.start();
     if (_bus == null) {
       _bus = _engine.createMixingBus(name: 'adaptive_music_${_serial++}');
       _bus!.playOnEngine();
@@ -66,16 +70,23 @@ class SoloudBackend implements AudioBackend {
   }
 
   @override
-  int schedule(int index, int engineTime) {
+  int schedule(
+    int index,
+    int engineTime, {
+    Duration offset = Duration.zero,
+    Duration duration = Duration.zero,
+  }) {
     final voice = _engine.playScheduled(
       _sources[index]!,
       Duration(microseconds: engineTime),
+      duration: duration,
       busId: _bus!.busId,
       volume: 0,
     );
     if (voice.id == 0) {
       throw StateError('Audio engine could not start a voice.');
     }
+    if (offset > Duration.zero) _engine.seek(voice, offset);
     _engine.setInaudibleBehavior(voice, true, false);
     _engine.setProtectVoice(voice, true);
     _voices[voice.id] = voice;
@@ -83,14 +94,13 @@ class SoloudBackend implements AudioBackend {
   }
 
   @override
+  void automate(int voice, GainAutomation automation) {
+    _gains!.automate(voice, automation);
+  }
+
+  @override
   void gain(int voice, double value, Duration smoothing) {
-    final handle = _voices[voice];
-    if (handle == null || !_engine.getIsValidVoiceHandle(handle)) return;
-    if (smoothing == Duration.zero) {
-      _engine.setVolume(handle, value);
-    } else {
-      _engine.fadeVolume(handle, value, smoothing);
-    }
+    _gains!.gain(voice, value, smoothing);
   }
 
   @override
@@ -104,7 +114,10 @@ class SoloudBackend implements AudioBackend {
   @override
   Future<void> stop(int voice) async {
     final handle = _voices.remove(voice);
-    if (handle != null) await _engine.stop(handle);
+    if (handle != null) {
+      await _gains!.remove(voice);
+      await _engine.stop(handle);
+    }
   }
 
   @override
@@ -177,6 +190,8 @@ class SoloudBackend implements AudioBackend {
   @override
   Future<void> dispose() async {
     await clear();
+    await _gains?.dispose();
+    _gains = null;
     _bus?.dispose();
     _bus = null;
     // SoLoud is shared with other app audio; never deinitialize it here.

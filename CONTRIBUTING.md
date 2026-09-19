@@ -30,6 +30,7 @@ cd example
 flutter test
 flutter build macos --debug
 flutter test integration_test/audio_test.dart -d macos
+flutter test integration_test/stalled_ui_test.dart -d macos
 ```
 
 Native output tests require macOS and play quiet synthetic tones. Run them for
