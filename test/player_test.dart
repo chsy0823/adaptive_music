@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:adaptive_music/src/envelope.dart';
 import 'package:adaptive_music/src/audio_backend.dart';
 import 'package:adaptive_music/src/models.dart';
 import 'package:adaptive_music/src/player.dart';
@@ -26,6 +27,11 @@ class FakeBackend implements AudioBackend {
     starts[++counter] = (index, engineTime);
     windows[counter] = (offset, duration);
     return counter;
+  }
+
+  @override
+  void automate(int voice, GainAutomation automation) {
+    gains[voice] = automation.at(now);
   }
 
   @override

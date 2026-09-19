@@ -155,10 +155,15 @@ work at a transition. Budget memory accordingly: stereo float PCM uses roughly
 For large music catalogs, load a bounded playlist.
 
 Track starts use the native engine's sample-accurate scheduler. The player keeps
-up to three successors queued ahead. Crossfade and control envelopes are updated
-on a 10 ms Dart control tick with native gain smoothing; filter interpolation runs
-in the native DSP engine. This is not a hard real-time scheduler: a blocked or
-suspended Dart isolate can delay fades, pause completion, and queue replenishment.
+up to three successors queued ahead. Crossfade and control envelopes run on a separate
+10 ms audio-control isolate with native gain smoothing, using SoLoud's public
+experimental isolate bindings. A busy UI isolate does not stop the envelopes of
+already queued voices. Filter interpolation runs in the native DSP engine.
+This is not a hard real-time scheduler: process suspension can still interrupt
+control work. Queue replenishment and pause completion remain on the host isolate.
+If a stall exhausts the queued tracks, playback catches up to the elapsed playlist
+position when the host resumes, including repeat modes; continuity is only
+protected within the queued horizon.
 The initial play reserves approximately 40 ms of scheduling lead-in.
 
 Gapless describes the engine boundary, not silence embedded in a recording.
@@ -191,6 +196,7 @@ flutter test
 cd example
 flutter test
 flutter test integration_test/audio_test.dart -d macos
+flutter test integration_test/stalled_ui_test.dart -d macos
 flutter build macos --debug
 ```
 
@@ -198,7 +204,9 @@ The native test plays low-volume synthetic tones. It checks non-silent windows
 across crossfade and gapless boundaries, pause/resume, and attenuation/restoration
 of a 6 kHz tone with a 500 Hz low-pass filter, high-shelf attenuation at
 −6/−12 dB, filter replacement, and preservation of a 600 Hz tone. It is a signal-level regression
-test, not a substitute for listening on supported physical devices.
+test, not a substitute for listening on supported physical devices. The stalled-UI
+test blocks the host isolate for 1.9 seconds across a crossfade and checks the
+captured native output for silent windows.
 
 ## License
 
