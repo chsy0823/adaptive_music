@@ -57,6 +57,44 @@ GitHub rulesets enforce these rules; this document alone does not. Changing
 repository settings requires administrator permission. External fork workflow
 runs may require maintainer approval before CI starts.
 
+## Versioning and releases
+
+Use Conventional Commit PR titles and commits: `fix:` for a patch, `feat:` for
+a minor version, and `!` / `BREAKING CHANGE:` for an incompatible change.
+Before 1.0, incompatible changes advance the minor version. Documentation-only
+and maintenance-only changes do not create a release on their own.
+
+On a push to `main`, Release Please creates or updates a Release PR containing
+`pubspec.yaml`, `CHANGELOG.md`, and `.release-please-manifest.json`. Review its
+version, release notes, and CI results. Only a maintainer merging that Release
+PR authorizes the workflow to create the corresponding `vX.Y.Z` tag and GitHub
+Release. This workflow does not merge PRs or publish to pub.dev. The example app
+is a local consumer and does not receive a separate release version.
+
+The initial baseline is the existing 0.1.0 package at commit `17217c5`. Changes
+since that baseline include new features, so the first proposed release is
+0.2.0. No historical 0.1.0 GitHub release is fabricated. Subsequent releases use
+the release manifest and conventional commits automatically.
+
+### One-time maintainer setup
+
+Before merging the automation setup, create a fine-grained personal access token
+restricted to `chsy0823/adaptive_music`, with **Contents**, **Pull requests**, and
+**Issues** read/write permissions, and register it as the Actions repository
+secret `RELEASE_PLEASE_TOKEN`. Set an expiry and rotate the secret before it
+expires. Never put the token in source files, PR text, or chat.
+
+A dedicated token is necessary because PRs created using `GITHUB_TOKEN` do not
+trigger the required CI workflows. The workflow intentionally fails with a setup
+message if the secret is absent; it does not fall back to a token that leaves
+Release PRs without checks. Repository rules and human review still apply.
+See the [official credential guidance](https://github.com/googleapis/release-please-action#github-credentials).
+
+After setup, a `main` push runs the automation; **Actions → Release Please → Run
+workflow** on `main` can retry it after credentials are configured or rotated.
+Package consumers can keep pinning immutable Git commits, or adopt a release tag
+after reviewing it. GitHub releases do not automatically update consuming apps.
+
 ## Audio and licensing
 
 Contributions are under this repository's MIT license. Only commit audio you
