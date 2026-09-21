@@ -97,8 +97,10 @@ playback; they are not live streams.
 | `PlaybackStart.restartTrack` | Start the current track from the beginning |
 
 Crossfade duration is capped at half the duration of each neighboring track.
-Manual skips fade all currently audible voices into the selected track. A skip
-while paused selects the new track without starting playback. `next()` at the
+Manual skips fade all currently audible voices into the selected track. During
+a manual crossfade, further skips retain only the latest requested track and
+start its transition after the current fade completes. This bounds overlapping
+voices even when controls are pressed rapidly. A skip while paused selects the new track without starting playback. `next()` at the
 end of a non-repeating playlist is a no-op; in a repeating playlist it wraps.
 
 `TransitionDefaults.immediate()` disables default command smoothing. Individual
