@@ -59,6 +59,8 @@ class AdaptiveMusicPlayer {
   int _origin = 0;
   int _held = 0;
   int? _pauseAt;
+  int _manualFadeEnd = 0;
+  int? _pendingSkip;
   int _index = 0;
   Future<void>? _loading;
   Future<void>? _disposing;
@@ -90,6 +92,8 @@ class AdaptiveMusicPlayer {
     _validateDuration(transition.duration);
     final copy = List<MusicTrack>.of(tracks);
     _generation++;
+    _manualFadeEnd = 0;
+    _pendingSkip = null;
     _status = PlaybackStatus.loading;
     _error = null;
     _clips.clear();
@@ -286,6 +290,8 @@ class AdaptiveMusicPlayer {
   }
 
   /// Manually transitions to another track using the playlist's transition.
+  /// During a manual crossfade, only the latest request is kept and starts
+  /// when that crossfade completes, bounding the number of overlapping voices.
   void skipTo(int index) {
     _checkReady();
     RangeError.checkValidIndex(index, _tracks);
@@ -295,6 +301,11 @@ class AdaptiveMusicPlayer {
       return;
     }
     final time = _time;
+    if (time < _manualFadeEnd) {
+      _pendingSkip = index;
+      return;
+    }
+    _pendingSkip = null;
     final audible = _clips
         .where((c) => c.start <= time && c.end > time)
         .toList();
@@ -307,6 +318,7 @@ class AdaptiveMusicPlayer {
     for (final clip in audible) {
       overlap = math.min(overlap, clip.end - time);
     }
+    _manualFadeEnd = time + overlap;
     for (final clip in audible) {
       if (overlap > 0) {
         // Retarget every audible voice; do not cut an existing overlap short.
@@ -344,6 +356,12 @@ class AdaptiveMusicPlayer {
   void tick() {
     if (!_running || _disposed) return;
     final time = _time;
+    if (_pendingSkip != null && time >= _manualFadeEnd) {
+      final index = _pendingSkip!;
+      _pendingSkip = null;
+      skipTo(index);
+      return;
+    }
     // Extend the logical timeline before discarding expired scheduled voices.
     // Jump whole repeat cycles so a long suspension cannot cause a huge loop.
     if (_clips.isNotEmpty &&
@@ -457,6 +475,8 @@ class AdaptiveMusicPlayer {
     math.min(_lengths[a] ~/ 2, _lengths[b] ~/ 2),
   );
   void _resetAt(int index) {
+    _manualFadeEnd = 0;
+    _pendingSkip = null;
     for (final clip in _clips) {
       _stopVoice(clip);
     }

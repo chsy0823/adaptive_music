@@ -460,6 +460,82 @@ void main() {
     await player.dispose();
     expect(() => player.play(), throwsStateError);
   });
+  test('rapid manual skips coalesce without accumulating voices', () async {
+    final backend = FakeBackend();
+    final player = AdaptiveMusicPlayer.withBackend(
+      backend,
+      automaticTick: false,
+      transitions: const TransitionDefaults.immediate(),
+    );
+    await player.load(
+      tracks: const [
+        MusicTrack.asset('a'),
+        MusicTrack.asset('b'),
+        MusicTrack.asset('c'),
+      ],
+      repeat: MusicRepeatMode.one,
+      transition: const TrackTransition.crossfade(
+        duration: Duration(seconds: 4),
+      ),
+    );
+    player.play();
+    backend.now = 140000;
+    player.skipTo(1);
+    for (var i = 0; i < 24; i++) {
+      backend.now += 100000;
+      player.skipTo(i % 3);
+      expect(backend.starts.length, lessThanOrEqualTo(4));
+    }
+    backend.now = 4140000;
+    player.tick();
+    expect(player.state.index, 2);
+    expect(backend.starts.length, lessThanOrEqualTo(4));
+    player.stop();
+    player.play();
+    backend.now += 5000000;
+    player.tick();
+    expect(player.state.index, 0);
+    await player.dispose();
+  });
+
+  test('stop and paused selection discard pending manual skips', () async {
+    final backend = FakeBackend();
+    final player = AdaptiveMusicPlayer.withBackend(
+      backend,
+      automaticTick: false,
+      transitions: const TransitionDefaults.immediate(),
+    );
+    await player.load(
+      tracks: const [
+        MusicTrack.asset('a'),
+        MusicTrack.asset('b'),
+        MusicTrack.asset('c'),
+      ],
+      repeat: MusicRepeatMode.one,
+      transition: const TrackTransition.crossfade(
+        duration: Duration(seconds: 4),
+      ),
+    );
+    player.play();
+    backend.now = 140000;
+    player.skipTo(1);
+    player.skipTo(2);
+    player.stop();
+    player.play();
+    backend.now += 5000000;
+    player.tick();
+    expect(player.state.index, 0);
+    player.skipTo(1);
+    player.skipTo(2);
+    player.pause();
+    player.skipTo(0);
+    player.play();
+    backend.now += 5000000;
+    player.tick();
+    expect(player.state.index, 0);
+    await player.dispose();
+  });
+
   test('manual skip during crossfade preserves both outgoing gains', () async {
     final backend = FakeBackend();
     final player = AdaptiveMusicPlayer.withBackend(
