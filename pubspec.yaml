@@ -1,6 +1,6 @@
 name: adaptive_music
 description: Smooth adaptive music playback with playlists, crossfades, looping and real-time low-pass filtering.
-version: 0.1.0
+version: 0.2.0
 repository: https://github.com/chsy0823/adaptive_music
 
 environment:
