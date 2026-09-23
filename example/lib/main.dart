@@ -55,7 +55,7 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
   double _volume = 0.65;
   double _fade = 0.6;
   double _crossfade = 3;
-  double _repeatCrossfade = 0.35;
+  double _skipCrossfade = 3;
   double _cutoff = 1200;
   bool _smooth = true;
   String _filterType = 'Off';
@@ -107,6 +107,10 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
       _state.status == PlaybackStatus.pausing;
   Duration get _duration =>
       Duration(milliseconds: _smooth ? (_fade * 1000).round() : 0);
+  TrackTransition get _skipTransition => TrackTransition.crossfade(
+    duration: Duration(milliseconds: (_skipCrossfade * 1000).round()),
+  );
+
   Future<void> _load() async {
     if (_busy) return;
     setState(() {
@@ -117,9 +121,6 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
       await _player.load(
         tracks: _tracks,
         repeat: _repeat,
-        repeatCrossfadeDuration: Duration(
-          milliseconds: (_repeatCrossfade * 1000).round(),
-        ),
         transition: _crossfade == 0
             ? const TrackTransition.gapless()
             : TrackTransition.crossfade(
@@ -381,7 +382,11 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
                   ),
                   IconButton.filledTonal(
                     tooltip: 'Next track',
-                    onPressed: _ready ? () => _command(_player.next) : null,
+                    onPressed: _ready
+                        ? () => _command(
+                            () => _player.next(transition: _skipTransition),
+                          )
+                        : null,
                     icon: const Icon(Icons.skip_next),
                   ),
                   IconButton.filledTonal(
@@ -421,7 +426,11 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
             trailing: i == index
                 ? const Text('Selected', style: TextStyle(color: blue))
                 : null,
-            onTap: _ready ? () => _command(() => _player.skipTo(i)) : null,
+            onTap: _ready
+                ? () => _command(
+                    () => _player.skipTo(i, transition: _skipTransition),
+                  )
+                : null,
           ),
         TextButton(
           onPressed: _busy
@@ -560,12 +569,12 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
         (v) => setState(() => _crossfade = v),
       ),
       _slider(
-        'Repeat overlap',
-        '${_repeatCrossfade.toStringAsFixed(2)} s',
-        _repeatCrossfade,
+        'Manual crossfade',
+        '${_skipCrossfade.toStringAsFixed(2)} s',
+        _skipCrossfade,
         0,
         3,
-        (v) => setState(() => _repeatCrossfade = v),
+        (v) => setState(() => _skipCrossfade = v),
       ),
       OutlinedButton(
         onPressed: _busy ? null : _load,

@@ -138,6 +138,39 @@ void main() {
         expect(samples, isNotEmpty);
         expect(rms(samples), greaterThan(0.002));
 
+        // A manual equal-power change must not inherit the short linear loop.
+        await player.load(
+          tracks: [MusicTrack.file(a.path), MusicTrack.file(b.path)],
+          repeat: MusicRepeatMode.one,
+          transition: const TrackTransition.crossfade(
+            duration: Duration(milliseconds: 200),
+            curve: FadeCurve.linear,
+          ),
+        );
+        player.play();
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        samples.clear();
+        player.skipTo(
+          1,
+          transition: const TrackTransition.crossfade(
+            duration: Duration(milliseconds: 600),
+            curve: FadeCurve.equalPower,
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 2400));
+        expect(samples.length, greaterThan(44100));
+        for (
+          var offset = 4410;
+          offset + window < samples.length;
+          offset += window
+        ) {
+          expect(
+            rms(samples.sublist(offset, offset + window)),
+            greaterThan(0.002),
+            reason: 'Manual transition / following repeat silence at $offset',
+          );
+        }
+
         await player.load(
           tracks: [
             MusicTrack.file(

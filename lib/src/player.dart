@@ -51,7 +51,6 @@ class AdaptiveMusicPlayer {
   final _clips = <_Clip>[];
   List<MusicTrack> _tracks = [];
   List<int> _lengths = [];
-  Duration? _repeatCrossfadeDuration;
   MusicRepeatMode _repeat = MusicRepeatMode.none;
   TrackTransition _transition = const TrackTransition.gapless();
   PlaybackStatus _status = PlaybackStatus.empty;
@@ -61,7 +60,7 @@ class AdaptiveMusicPlayer {
   int _held = 0;
   int? _pauseAt;
   int _manualFadeEnd = 0;
-  int? _pendingSkip;
+  ({int index, TrackTransition transition})? _pendingSkip;
   int _index = 0;
   Future<void>? _loading;
   Future<void>? _disposing;
@@ -77,14 +76,11 @@ class AdaptiveMusicPlayer {
   int get _time => _running ? math.max(0, _backend.now - _origin) : _held;
 
   /// Replaces the playlist. All tracks must be finite and at least 100 ms long.
-  /// [repeatCrossfadeDuration] overrides overlap only at automatic same-track
-  /// boundaries, using the transition curve. Null preserves the playlist default.
   /// Loading stops current playback. If any source fails, the whole load fails.
   Future<void> load({
     required List<MusicTrack> tracks,
     MusicRepeatMode repeat = MusicRepeatMode.none,
     TrackTransition transition = const TrackTransition.crossfade(),
-    Duration? repeatCrossfadeDuration,
   }) {
     _checkAlive();
     if (_status == PlaybackStatus.loading) {
@@ -94,9 +90,6 @@ class AdaptiveMusicPlayer {
       throw ArgumentError('Provide at least one non-empty track.');
     }
     _validateDuration(transition.duration);
-    if (repeatCrossfadeDuration != null) {
-      _validateDuration(repeatCrossfadeDuration);
-    }
     final copy = List<MusicTrack>.of(tracks);
     _generation++;
     _manualFadeEnd = 0;
@@ -109,14 +102,13 @@ class AdaptiveMusicPlayer {
     _index = 0;
     _held = 0;
     _emit();
-    return _loading = _load(copy, repeat, transition, repeatCrossfadeDuration);
+    return _loading = _load(copy, repeat, transition);
   }
 
   Future<void> _load(
     List<MusicTrack> tracks,
     MusicRepeatMode repeat,
     TrackTransition transition,
-    Duration? repeatCrossfadeDuration,
   ) async {
     try {
       await _backend.initialize();
@@ -143,7 +135,6 @@ class AdaptiveMusicPlayer {
       _lengths = lengths;
       _repeat = repeat;
       _transition = transition;
-      _repeatCrossfadeDuration = repeatCrossfadeDuration;
       _status = PlaybackStatus.ready;
       _pauseAt = null;
       _emit();
@@ -298,12 +289,15 @@ class AdaptiveMusicPlayer {
     _backend.setFilter(null, fade);
   }
 
-  /// Manually transitions to another track using the playlist's transition.
+  /// Manually transitions to another track. [transition] overrides this command's
+  /// fade only; omitted settings use the playlist transition.
   /// During a manual crossfade, only the latest request is kept and starts
   /// when that crossfade completes, bounding the number of overlapping voices.
-  void skipTo(int index) {
+  void skipTo(int index, {TrackTransition? transition}) {
     _checkReady();
     RangeError.checkValidIndex(index, _tracks);
+    final fade = transition ?? _transition;
+    _validateDuration(fade.duration);
     if (!_running) {
       _resetAt(index);
       _emit();
@@ -311,7 +305,7 @@ class AdaptiveMusicPlayer {
     }
     final time = _time;
     if (time < _manualFadeEnd) {
-      _pendingSkip = index;
+      _pendingSkip = (index: index, transition: fade);
       return;
     }
     _pendingSkip = null;
@@ -322,7 +316,7 @@ class AdaptiveMusicPlayer {
       _stopVoice(clip);
     }
     _clips.clear();
-    var overlap = _transition.duration.inMicroseconds;
+    var overlap = fade.duration.inMicroseconds;
     overlap = math.min(overlap, _lengths[index] ~/ 2);
     for (final clip in audible) {
       overlap = math.min(overlap, clip.end - time);
@@ -331,10 +325,11 @@ class AdaptiveMusicPlayer {
     for (final clip in audible) {
       if (overlap > 0) {
         // Retarget every audible voice; do not cut an existing overlap short.
-        clip.fixedGain = clip.gain(time, _transition.curve);
+        clip.fixedGain = clip.gain(time);
         clip.fadeIn = 0;
         clip.end = time + overlap;
         clip.fadeOut = overlap;
+        clip.fadeOutCurve = fade.curve;
         _clips.add(clip);
       } else {
         _stopVoice(clip);
@@ -346,18 +341,20 @@ class AdaptiveMusicPlayer {
         time,
         time + _lengths[index],
         fadeIn: audible.isEmpty ? 0 : overlap,
+        fadeInCurve: fade.curve,
       ),
     );
     _index = index;
     tick();
   }
 
-  void next() {
+  void next({TrackTransition? transition}) {
     _checkReady();
+    if (transition != null) _validateDuration(transition.duration);
     if (_index + 1 < _tracks.length) {
-      skipTo(_index + 1);
+      skipTo(_index + 1, transition: transition);
     } else if (_repeat != MusicRepeatMode.none) {
-      skipTo(0);
+      skipTo(0, transition: transition);
     }
   }
 
@@ -366,9 +363,9 @@ class AdaptiveMusicPlayer {
     if (!_running || _disposed) return;
     final time = _time;
     if (_pendingSkip != null && time >= _manualFadeEnd) {
-      final index = _pendingSkip!;
+      final pending = _pendingSkip!;
       _pendingSkip = null;
-      skipTo(index);
+      skipTo(pending.index, transition: pending.transition);
       return;
     }
     // Extend the logical timeline before discarding expired scheduled voices.
@@ -395,6 +392,7 @@ class AdaptiveMusicPlayer {
             last.start + shift,
             last.end + shift,
             fadeIn: last.fadeIn,
+            fadeInCurve: last.fadeInCurve,
           ),
         );
       }
@@ -408,8 +406,17 @@ class AdaptiveMusicPlayer {
       }
       final overlap = _overlap(last.index, next);
       last.fadeOut = overlap;
+      last.fadeOutCurve = _transition.curve;
       final start = last.end - overlap;
-      _clips.add(_Clip(next, start, start + _lengths[next], fadeIn: overlap));
+      _clips.add(
+        _Clip(
+          next,
+          start,
+          start + _lengths[next],
+          fadeIn: overlap,
+          fadeInCurve: _transition.curve,
+        ),
+      );
     }
     for (final clip in _clips.where((c) => c.end <= time).toList()) {
       _stopVoice(clip);
@@ -428,8 +435,17 @@ class AdaptiveMusicPlayer {
       if (next == null) break;
       final overlap = _overlap(last.index, next);
       last.fadeOut = overlap;
+      last.fadeOutCurve = _transition.curve;
       final start = last.end - overlap;
-      _clips.add(_Clip(next, start, start + _lengths[next], fadeIn: overlap));
+      _clips.add(
+        _Clip(
+          next,
+          start,
+          start + _lengths[next],
+          fadeIn: overlap,
+          fadeInCurve: _transition.curve,
+        ),
+      );
     }
     for (final clip in _clips) {
       final lateness = math.max(0, time - clip.start);
@@ -447,7 +463,8 @@ class AdaptiveMusicPlayer {
           fadeIn: clip.fadeIn,
           fadeOut: clip.fadeOut,
           fixedGain: clip.fixedGain,
-          curve: _transition.curve,
+          curve: clip.fadeInCurve,
+          fadeOutCurve: clip.fadeOutCurve,
           volume: _volume,
           duck: _duck,
           transport: _transport,
@@ -480,10 +497,7 @@ class AdaptiveMusicPlayer {
     MusicRepeatMode.none => index + 1 < _tracks.length ? index + 1 : null,
   };
   int _overlap(int a, int b) => math.min(
-    (a == b
-            ? _repeatCrossfadeDuration ?? _transition.duration
-            : _transition.duration)
-        .inMicroseconds,
+    _transition.duration.inMicroseconds,
     math.min(_lengths[a] ~/ 2, _lengths[b] ~/ 2),
   );
   void _resetAt(int index) {
@@ -586,14 +600,30 @@ class AdaptiveMusicPlayer {
 }
 
 class _Clip {
-  _Clip(this.index, this.start, this.end, {this.fadeIn = 0});
+  _Clip(
+    this.index,
+    this.start,
+    this.end, {
+    this.fadeIn = 0,
+    this.fadeInCurve = FadeCurve.linear,
+  });
   final int index;
   final int start;
   int end;
   int fadeIn;
   int fadeOut = 0;
+  final FadeCurve fadeInCurve;
+  FadeCurve fadeOutCurve = FadeCurve.linear;
   int? voice;
   double fixedGain = 1;
-  double gain(int time, FadeCurve curve) =>
-      clipGain(time, start, end, fadeIn, fadeOut, fixedGain, curve);
+  double gain(int time) => clipGain(
+    time,
+    start,
+    end,
+    fadeIn,
+    fadeOut,
+    fixedGain,
+    fadeInCurve,
+    fadeOutCurve,
+  );
 }

@@ -74,59 +74,116 @@ class FakeBackend implements AudioBackend {
 
 void main() {
   test(
-    'repeat overlap validates input and zero applies to a singleton playlist',
+    'manual fade overrides duration and curve without changing automatic repeats',
     () async {
       final backend = FakeBackend();
       final player = AdaptiveMusicPlayer.withBackend(
         backend,
         automaticTick: false,
       );
-      expect(
-        () => player.load(
-          tracks: const [MusicTrack.asset('a')],
-          repeatCrossfadeDuration: const Duration(milliseconds: -1),
-        ),
-        throwsArgumentError,
-      );
       await player.load(
-        tracks: const [MusicTrack.asset('a')],
-        repeat: MusicRepeatMode.all,
-        repeatCrossfadeDuration: Duration.zero,
+        tracks: const [MusicTrack.asset('a'), MusicTrack.asset('b')],
+        repeat: MusicRepeatMode.one,
+        transition: const TrackTransition.crossfade(
+          duration: Duration(milliseconds: 350),
+          curve: FadeCurve.linear,
+        ),
       );
-      player.play();
+      player.play(transition: Duration.zero);
       final starts = backend.starts.values.toList();
-      expect(starts[1].$2 - starts[0].$2, 10000000);
+      expect(starts[1].$2 - starts[0].$2, 9650000);
+      backend.now = starts[0].$2 + 1000000;
+      player.skipTo(
+        1,
+        transition: const TrackTransition.crossfade(
+          duration: Duration(seconds: 3),
+        ),
+      );
+      backend.now += 1500000;
+      player.tick();
+      final audible = backend.gains.values.where((g) => g > 0.01).toList();
+      expect(audible, hasLength(2));
+      for (final gain in audible) {
+        expect(gain, closeTo(0.70710678, 0.00001));
+      }
+      // The incoming clip later repeats with the original short, linear fade.
+      backend.now += 8325000;
+      player.tick();
+      final repeated = backend.gains.values.where((g) => g > 0.01).toList();
+      expect(repeated, hasLength(2));
+      for (final gain in repeated) {
+        expect(gain, closeTo(0.5, 0.00001));
+      }
       await player.dispose();
     },
   );
 
-  test('short repeat overlap preserves longer manual track changes', () async {
-    final backend = FakeBackend();
-    final player = AdaptiveMusicPlayer.withBackend(
-      backend,
-      automaticTick: false,
-    );
-    await player.load(
-      tracks: const [MusicTrack.asset('a'), MusicTrack.asset('b')],
-      repeat: MusicRepeatMode.one,
-      transition: const TrackTransition.crossfade(
-        duration: Duration(seconds: 3),
-      ),
-      repeatCrossfadeDuration: const Duration(milliseconds: 350),
-    );
-    player.play(transition: Duration.zero);
-    final starts = backend.starts.values.toList();
-    expect(starts[1].$2 - starts[0].$2, 9650000);
-    backend.now = starts[0].$2 + 1000000;
-    player.skipTo(1);
-    backend.now += 1500000;
-    player.tick();
-    expect(player.state.overlapping, isTrue);
-    backend.now += 1600000;
-    player.tick();
-    expect(player.state.overlapping, isFalse);
-    await player.dispose();
-  });
+  test(
+    'queued latest skip retains its override and rejects invalid durations',
+    () async {
+      final backend = FakeBackend();
+      final player = AdaptiveMusicPlayer.withBackend(
+        backend,
+        automaticTick: false,
+      );
+      await player.load(
+        tracks: const [
+          MusicTrack.asset('a'),
+          MusicTrack.asset('b'),
+          MusicTrack.asset('c'),
+        ],
+        repeat: MusicRepeatMode.one,
+      );
+      player.play(transition: Duration.zero);
+      backend.now = backend.starts.values.first.$2 + 1000000;
+      player.skipTo(
+        1,
+        transition: const TrackTransition.crossfade(
+          duration: Duration(seconds: 1),
+        ),
+      );
+      player.skipTo(
+        0,
+        transition: const TrackTransition.crossfade(
+          duration: Duration(seconds: 2),
+        ),
+      );
+      player.skipTo(
+        2,
+        transition: const TrackTransition.crossfade(
+          duration: Duration(seconds: 2),
+          curve: FadeCurve.linear,
+        ),
+      );
+      expect(
+        () => player.skipTo(
+          0,
+          transition: const TrackTransition.crossfade(
+            duration: Duration(seconds: -1),
+          ),
+        ),
+        throwsArgumentError,
+      );
+      backend.now += 1000000;
+      player.tick();
+      expect(player.state.index, 2);
+      backend.now += 1000000;
+      player.tick();
+      final audible = backend.gains.values
+          .where((gain) => gain > 0.01)
+          .toList();
+      expect(audible, hasLength(2));
+      for (final gain in audible) {
+        expect(gain, closeTo(0.5, 0.00001));
+      }
+      backend.now += 1000000;
+      player.tick();
+      player.next(transition: const TrackTransition.gapless());
+      expect(player.state.index, 0);
+      expect(player.state.overlapping, isFalse);
+      await player.dispose();
+    },
+  );
 
   test('cue windows outside the source are rejected', () async {
     for (final track in [
