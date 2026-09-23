@@ -51,6 +51,7 @@ class AdaptiveMusicPlayer {
   final _clips = <_Clip>[];
   List<MusicTrack> _tracks = [];
   List<int> _lengths = [];
+  Duration? _repeatCrossfadeDuration;
   MusicRepeatMode _repeat = MusicRepeatMode.none;
   TrackTransition _transition = const TrackTransition.gapless();
   PlaybackStatus _status = PlaybackStatus.empty;
@@ -76,11 +77,14 @@ class AdaptiveMusicPlayer {
   int get _time => _running ? math.max(0, _backend.now - _origin) : _held;
 
   /// Replaces the playlist. All tracks must be finite and at least 100 ms long.
+  /// [repeatCrossfadeDuration] overrides overlap only at automatic same-track
+  /// boundaries, using the transition curve. Null preserves the playlist default.
   /// Loading stops current playback. If any source fails, the whole load fails.
   Future<void> load({
     required List<MusicTrack> tracks,
     MusicRepeatMode repeat = MusicRepeatMode.none,
     TrackTransition transition = const TrackTransition.crossfade(),
+    Duration? repeatCrossfadeDuration,
   }) {
     _checkAlive();
     if (_status == PlaybackStatus.loading) {
@@ -90,6 +94,9 @@ class AdaptiveMusicPlayer {
       throw ArgumentError('Provide at least one non-empty track.');
     }
     _validateDuration(transition.duration);
+    if (repeatCrossfadeDuration != null) {
+      _validateDuration(repeatCrossfadeDuration);
+    }
     final copy = List<MusicTrack>.of(tracks);
     _generation++;
     _manualFadeEnd = 0;
@@ -102,13 +109,14 @@ class AdaptiveMusicPlayer {
     _index = 0;
     _held = 0;
     _emit();
-    return _loading = _load(copy, repeat, transition);
+    return _loading = _load(copy, repeat, transition, repeatCrossfadeDuration);
   }
 
   Future<void> _load(
     List<MusicTrack> tracks,
     MusicRepeatMode repeat,
     TrackTransition transition,
+    Duration? repeatCrossfadeDuration,
   ) async {
     try {
       await _backend.initialize();
@@ -135,6 +143,7 @@ class AdaptiveMusicPlayer {
       _lengths = lengths;
       _repeat = repeat;
       _transition = transition;
+      _repeatCrossfadeDuration = repeatCrossfadeDuration;
       _status = PlaybackStatus.ready;
       _pauseAt = null;
       _emit();
@@ -471,7 +480,10 @@ class AdaptiveMusicPlayer {
     MusicRepeatMode.none => index + 1 < _tracks.length ? index + 1 : null,
   };
   int _overlap(int a, int b) => math.min(
-    _transition.duration.inMicroseconds,
+    (a == b
+            ? _repeatCrossfadeDuration ?? _transition.duration
+            : _transition.duration)
+        .inMicroseconds,
     math.min(_lengths[a] ~/ 2, _lengths[b] ~/ 2),
   );
   void _resetAt(int index) {

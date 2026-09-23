@@ -96,6 +96,11 @@ playback; they are not live streams.
 | `PlaybackStart.resume` | Resume where playback paused; after completion, start the list again |
 | `PlaybackStart.restartTrack` | Start the current track from the beginning |
 
+`load(repeatCrossfadeDuration: Duration(milliseconds: 350))` shortens automatic
+same-track repeats while preserving the playlist transition for manual skips and
+different tracks. It uses the same fade curve; zero gives a gapless repeat and
+null (the default) preserves the playlist duration.
+
 Crossfade duration is capped at half the duration of each neighboring track.
 Manual skips fade all currently audible voices into the selected track. During
 a manual crossfade, further skips retain only the latest requested track and

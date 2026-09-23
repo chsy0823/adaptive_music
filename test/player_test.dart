@@ -73,6 +73,61 @@ class FakeBackend implements AudioBackend {
 }
 
 void main() {
+  test(
+    'repeat overlap validates input and zero applies to a singleton playlist',
+    () async {
+      final backend = FakeBackend();
+      final player = AdaptiveMusicPlayer.withBackend(
+        backend,
+        automaticTick: false,
+      );
+      expect(
+        () => player.load(
+          tracks: const [MusicTrack.asset('a')],
+          repeatCrossfadeDuration: const Duration(milliseconds: -1),
+        ),
+        throwsArgumentError,
+      );
+      await player.load(
+        tracks: const [MusicTrack.asset('a')],
+        repeat: MusicRepeatMode.all,
+        repeatCrossfadeDuration: Duration.zero,
+      );
+      player.play();
+      final starts = backend.starts.values.toList();
+      expect(starts[1].$2 - starts[0].$2, 10000000);
+      await player.dispose();
+    },
+  );
+
+  test('short repeat overlap preserves longer manual track changes', () async {
+    final backend = FakeBackend();
+    final player = AdaptiveMusicPlayer.withBackend(
+      backend,
+      automaticTick: false,
+    );
+    await player.load(
+      tracks: const [MusicTrack.asset('a'), MusicTrack.asset('b')],
+      repeat: MusicRepeatMode.one,
+      transition: const TrackTransition.crossfade(
+        duration: Duration(seconds: 3),
+      ),
+      repeatCrossfadeDuration: const Duration(milliseconds: 350),
+    );
+    player.play(transition: Duration.zero);
+    final starts = backend.starts.values.toList();
+    expect(starts[1].$2 - starts[0].$2, 9650000);
+    backend.now = starts[0].$2 + 1000000;
+    player.skipTo(1);
+    backend.now += 1500000;
+    player.tick();
+    expect(player.state.overlapping, isTrue);
+    backend.now += 1600000;
+    player.tick();
+    expect(player.state.overlapping, isFalse);
+    await player.dispose();
+  });
+
   test('cue windows outside the source are rejected', () async {
     for (final track in [
       const MusicTrack.asset('a', cueIn: Duration(seconds: -1)),

@@ -55,6 +55,7 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
   double _volume = 0.65;
   double _fade = 0.6;
   double _crossfade = 3;
+  double _repeatCrossfade = 0.35;
   double _cutoff = 1200;
   bool _smooth = true;
   String _filterType = 'Off';
@@ -116,6 +117,9 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
       await _player.load(
         tracks: _tracks,
         repeat: _repeat,
+        repeatCrossfadeDuration: Duration(
+          milliseconds: (_repeatCrossfade * 1000).round(),
+        ),
         transition: _crossfade == 0
             ? const TrackTransition.gapless()
             : TrackTransition.crossfade(
@@ -554,6 +558,14 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
         0,
         5,
         (v) => setState(() => _crossfade = v),
+      ),
+      _slider(
+        'Repeat overlap',
+        '${_repeatCrossfade.toStringAsFixed(2)} s',
+        _repeatCrossfade,
+        0,
+        3,
+        (v) => setState(() => _repeatCrossfade = v),
       ),
       OutlinedButton(
         onPressed: _busy ? null : _load,
