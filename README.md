@@ -96,9 +96,32 @@ playback; they are not live streams.
 | `PlaybackStart.resume` | Resume where playback paused; after completion, start the list again |
 | `PlaybackStart.restartTrack` | Start the current track from the beginning |
 
+`load(transition: ...)` sets automatic transitions, including repeat boundaries.
+`skipTo(index, transition: ...)` and `next(transition: ...)` can override the
+fade duration and curve for that manual command without changing subsequent
+automatic transitions. Omit the override to use the playlist setting.
+
+```dart
+await music.load(
+  tracks: tracks,
+  repeat: MusicRepeatMode.one,
+  transition: const TrackTransition.crossfade(
+    duration: Duration(milliseconds: 350),
+    curve: FadeCurve.linear,
+  ),
+);
+music.skipTo(1, transition: const TrackTransition.crossfade(
+  duration: Duration(seconds: 8),
+  curve: FadeCurve.equalPower,
+));
+```
+
+The listening lab has separate **Track crossfade** (automatic) and
+**Manual crossfade** (track selection / Next) controls.
+
 Crossfade duration is capped at half the duration of each neighboring track.
 Manual skips fade all currently audible voices into the selected track. During
-a manual crossfade, further skips retain only the latest requested track and
+a manual crossfade, further skips retain only the latest requested track and its transition settings, and
 start its transition after the current fade completes. This bounds overlapping
 voices even when controls are pressed rapidly. A skip while paused selects the new track without starting playback. `next()` at the
 end of a non-repeating playlist is a no-op; in a repeating playlist it wraps.

@@ -31,6 +31,7 @@ class GainAutomation {
     required this.fadeOut,
     required this.fixedGain,
     required this.curve,
+    this.fadeOutCurve,
     required this.volume,
     required this.duck,
     required this.transport,
@@ -38,6 +39,7 @@ class GainAutomation {
   final int start, end, fadeIn, fadeOut;
   final double fixedGain;
   final FadeCurve curve;
+  final FadeCurve? fadeOutCurve;
   final Envelope volume, duck, transport;
 
   double at(int now) =>
@@ -49,6 +51,7 @@ class GainAutomation {
         fadeOut,
         fixedGain,
         curve,
+        fadeOutCurve,
       ) *
       volume.at(now) *
       duck.at(now) *
@@ -62,8 +65,9 @@ double clipGain(
   int fadeIn,
   int fadeOut,
   double fixedGain,
-  FadeCurve curve,
-) {
+  FadeCurve curve, [
+  FadeCurve? fadeOutCurve,
+]) {
   if (time >= end) return 0;
   var value = 1.0;
   if (fadeIn > 0 && time < start + fadeIn) {
@@ -71,6 +75,7 @@ double clipGain(
   }
   if (fadeOut > 0 && time > end - fadeOut) {
     value = ((end - time) / fadeOut).clamp(0.0, 1.0);
+    curve = fadeOutCurve ?? curve;
   }
   return fixedGain *
       (curve == FadeCurve.equalPower ? math.sin(value * math.pi / 2) : value);
