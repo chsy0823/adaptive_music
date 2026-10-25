@@ -11,6 +11,7 @@ void main() {
     expect(find.text('High-shelf'), findsOneWidget);
     expect(find.text('Smooth controls'), findsOneWidget);
     expect(find.text('Open audio'), findsOneWidget);
+    expect(find.text('Restart audio engine'), findsOneWidget);
     await tester.ensureVisible(find.text('High-shelf'));
     await tester.tap(find.text('High-shelf'));
     await tester.pump();

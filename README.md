@@ -200,6 +200,32 @@ The host owns OS audio-session policy, interruptions, background execution, and
 headphone routing. The example pauses when backgrounded. The library does not
 shut down the shared SoLoud engine when a player is disposed.
 
+## Media services reset
+
+On iOS the media server can restart while the app runs
+(`AVAudioSessionMediaServicesWereResetNotification`). The engine's output device
+and native voices die silently while players still report their last status. The
+library cannot observe the notification; the host does, restores its audio
+session, and then calls:
+
+```dart
+await AdaptiveMusicPlayer.restartEngine();
+```
+
+This shuts the shared engine down once and rebuilds every live player. Each
+playlist is decoded again and the selected track, position, volume, ducking and
+filter are restored. A playing player resumes with the play fade; a paused player
+stays paused at its position; ready and completed players keep their status.
+Players report `loading` while they are rebuilt and reject commands as during a
+load, and a `load()` on another player waits for the new engine. Concurrent calls
+share one restart. A load in flight finishes first and its playlist is rebuilt. A
+crossfade in progress resumes with its incoming track only. A player whose reload
+fails reports `failed`; if the engine itself cannot restart, every rebuilt player
+fails and the returned future completes with that error.
+
+In the lab, **Restart audio engine** runs this while music plays; playback should
+continue from the same position with the same tone.
+
 ## Repository
 
 ```text
@@ -222,6 +248,7 @@ cd example
 flutter test
 flutter test integration_test/audio_test.dart -d macos
 flutter test integration_test/stalled_ui_test.dart -d macos
+flutter test integration_test/engine_restart_test.dart -d macos
 flutter build macos --debug
 ```
 
@@ -231,7 +258,10 @@ of a 6 kHz tone with a 500 Hz low-pass filter, high-shelf attenuation at
 −6/−12 dB, filter replacement, and preservation of a 600 Hz tone. It is a signal-level regression
 test, not a substitute for listening on supported physical devices. The stalled-UI
 test blocks the host isolate for 1.9 seconds across a crossfade and checks the
-captured native output for silent windows.
+captured native output for silent windows. The engine-restart test shuts the
+engine down under a playing low-passed tone and a paused player, then checks that
+the tone returns at its position with the filter still applied and that the
+paused player stays paused.
 
 ## License
 

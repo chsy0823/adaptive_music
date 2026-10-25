@@ -12,16 +12,34 @@ import 'gain_worker.dart';
 class SoloudBackend implements AudioBackend {
   static int _serial = 0;
   static Future<void>? _initializing;
+
+  /// Set while players release their resources around an engine restart.
+  /// Initialization waits for it so no bus is created on the dying engine.
+  static Future<void>? restarting;
   late final _engine = SoLoud.instance;
   final _sources = <int, AudioSource>{};
   final _voices = <int, SoundHandle>{};
   Bus? _bus;
   GainWorker? _gains;
   bool _filterActive = false;
+
+  /// Shuts the shared engine down after its output died with the platform's
+  /// media services. The next [initialize] starts it again.
+  static Future<void> restartEngine() async {
+    try {
+      await _initializing;
+    } catch (_) {
+      /* a failed initialization is reported to its own caller */
+    }
+    final engine = SoLoud.instance;
+    if (engine.isInitialized) await engine.deinitAsync();
+  }
+
   @override
   int get now => _bus != null ? _engine.getEngineTime().inMicroseconds : 0;
   @override
   Future<void> initialize() async {
+    await restarting;
     if (!_engine.isInitialized) {
       try {
         await (_initializing ??= _engine.init());
@@ -194,6 +212,8 @@ class SoloudBackend implements AudioBackend {
     _gains = null;
     _bus?.dispose();
     _bus = null;
+    _filterActive = false;
     // SoLoud is shared with other app audio; never deinitialize it here.
+    // Only [restartEngine] does, after every player has released its bus.
   }
 }

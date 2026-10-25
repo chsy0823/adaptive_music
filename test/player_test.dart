@@ -12,11 +12,20 @@ class FakeBackend implements AudioBackend {
   final gains = <int, double>{};
   final paused = <int>{};
   int counter = 0;
+  int initializations = 0;
+  int loads = 0;
+  int disposals = 0;
   @override
-  Future<void> initialize() async {}
+  Future<void> initialize() async {
+    initializations++;
+  }
+
   @override
-  Future<Duration> load(MusicTrack track, int index) async =>
-      const Duration(seconds: 10);
+  Future<Duration> load(MusicTrack track, int index) async {
+    loads++;
+    return const Duration(seconds: 10);
+  }
+
   @override
   int schedule(
     int index,
@@ -68,6 +77,7 @@ class FakeBackend implements AudioBackend {
 
   @override
   Future<void> dispose() async {
+    disposals++;
     await clear();
   }
 }

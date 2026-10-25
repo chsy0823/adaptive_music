@@ -161,6 +161,21 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> _restartEngine() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await AdaptiveMusicPlayer.restartEngine();
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _pickTracks() async {
     try {
       final files = await openFiles(
@@ -583,6 +598,23 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
       const SizedBox(height: 6),
       const Text(
         'Applying playlist setup stops playback and prepares the list again.',
+        style: TextStyle(fontSize: 12, height: 1.5),
+      ),
+      const Divider(height: 30),
+      const Text(
+        'Recovery',
+        style: TextStyle(fontSize: 19, fontWeight: FontWeight.w600),
+      ),
+      const SizedBox(height: 12),
+      OutlinedButton(
+        onPressed: _busy ? null : _restartEngine,
+        child: const Text('Restart audio engine'),
+      ),
+      const SizedBox(height: 6),
+      const Text(
+        'Rebuilds the engine and this player as a host does after iOS resets '
+        'its media services. Playback continues from the same position with '
+        'the same tone.',
         style: TextStyle(fontSize: 12, height: 1.5),
       ),
     ],
