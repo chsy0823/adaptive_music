@@ -704,7 +704,8 @@ void main() {
     expect(player.state.status, PlaybackStatus.paused);
     backend.now = 5000000;
     player.play();
-    expect(backend.starts.values.single.$2, backend.now);
+    // The voice was never created, so resume reserves a fresh start's lead-in.
+    expect(backend.starts.values.single.$2, backend.now + 40000);
     expect(player.state.position, Duration.zero);
     await player.dispose();
   });

@@ -37,9 +37,17 @@ class SoloudBackend implements AudioBackend {
 
   @override
   int get now => _bus != null ? _engine.getEngineTime().inMicroseconds : 0;
+  Future<void>? _releasing;
+
   @override
   Future<void> initialize() async {
     await restarting;
+    try {
+      await _releasing;
+    } catch (_) {
+      /* a failed release already dropped its handles */
+    }
+    _releasing = null;
     if (!_engine.isInitialized) {
       try {
         await (_initializing ??= _engine.init());
@@ -133,7 +141,7 @@ class SoloudBackend implements AudioBackend {
   Future<void> stop(int voice) async {
     final handle = _voices.remove(voice);
     if (handle != null) {
-      await _gains!.remove(voice);
+      await _gains?.remove(voice);
       await _engine.stop(handle);
     }
   }
@@ -194,25 +202,52 @@ class SoloudBackend implements AudioBackend {
     }
   }
 
+  /// Drops every voice and source even when the engine rejects some of the
+  /// releases, then reports the first failure.
   @override
   Future<void> clear() async {
+    Object? failure;
+    StackTrace? trace;
     for (final voice in _voices.keys.toList()) {
-      await stop(voice);
+      try {
+        await stop(voice);
+      } catch (error, stack) {
+        failure ??= error;
+        trace ??= stack;
+      }
     }
-    for (final source in _sources.values) {
-      await _engine.disposeSource(source);
+    for (final source in _sources.values.toList()) {
+      try {
+        await _engine.disposeSource(source);
+      } catch (error, stack) {
+        failure ??= error;
+        trace ??= stack;
+      }
     }
     _sources.clear();
+    if (failure != null) Error.throwWithStackTrace(failure, trace!);
   }
 
   @override
-  Future<void> dispose() async {
-    await clear();
-    await _gains?.dispose();
-    _gains = null;
-    _bus?.dispose();
-    _bus = null;
-    _filterActive = false;
+  Future<void> dispose() => _releasing ??= _release();
+
+  Future<void> _release() async {
+    try {
+      await clear();
+    } finally {
+      // Forget the worker and bus whatever the engine said, so a later
+      // initialize() builds new ones instead of reusing a dead bus.
+      final gains = _gains;
+      final bus = _bus;
+      _gains = null;
+      _bus = null;
+      _filterActive = false;
+      try {
+        await gains?.dispose();
+      } finally {
+        bus?.dispose();
+      }
+    }
     // SoLoud is shared with other app audio; never deinitialize it here.
     // Only [restartEngine] does, after every player has released its bus.
   }

@@ -39,12 +39,23 @@ class AdaptiveMusicPlayer {
         }
       });
     }
-    _live.add(this);
+    _live.add(WeakReference(this));
   }
 
-  /// Players that [restartEngine] rebuilds; disposal removes them.
-  static final _live = <AdaptiveMusicPlayer>{};
+  /// Players that [restartEngine] rebuilds. Weak, so a player that is never
+  /// disposed stays collectable; disposal removes it.
+  static final _live = <WeakReference<AdaptiveMusicPlayer>>{};
   static Future<void>? _restarting;
+  static Future<void>? _queued;
+  static bool _restoring = false;
+
+  /// Disposals in flight; an engine restart waits for them first.
+  static final _disposals = <Future<void>>{};
+
+  static List<AdaptiveMusicPlayer> get _livePlayers {
+    _live.removeWhere((ref) => ref.target == null);
+    return [for (final ref in _live) ?ref.target];
+  }
 
   final AudioBackend _backend;
   final TransitionDefaults transitions;
@@ -75,6 +86,7 @@ class AdaptiveMusicPlayer {
   MusicFilter? _filter;
   ({PlaybackStatus status, int index, int position})? _snapshot;
   Completer<void>? _restartDone;
+  bool _rebuilding = false;
 
   MusicState get state => _state;
   Stream<MusicState> get states => _events.stream;
@@ -91,6 +103,9 @@ class AdaptiveMusicPlayer {
     TrackTransition transition = const TrackTransition.crossfade(),
   }) {
     _checkAlive();
+    if (_rebuilding) {
+      throw StateError('The player is being rebuilt by restartEngine().');
+    }
     if (_status == PlaybackStatus.loading) {
       throw StateError('A load is already in progress.');
     }
@@ -99,16 +114,12 @@ class AdaptiveMusicPlayer {
     }
     _validateDuration(transition.duration);
     final copy = List<MusicTrack>.of(tracks);
-    _generation++;
-    _manualFadeEnd = 0;
-    _pendingSkip = null;
+    _clearTimeline();
     _status = PlaybackStatus.loading;
     _error = null;
-    _clips.clear();
     _tracks = [];
     _lengths = [];
     _index = 0;
-    _held = 0;
     _emit();
     return _loading = _load(copy, repeat, transition);
   }
@@ -182,7 +193,9 @@ class AdaptiveMusicPlayer {
       _clips.add(_Clip(_index, 0, _lengths[_index]));
       _transport.moveTo(0, now, 0);
     } else if (!_running) {
-      _origin = now - _held;
+      // Clips restored without voices need the lead-in a fresh start gets.
+      final lead = _clips.every((c) => c.voice == null) ? 40000 : 0;
+      _origin = now + lead - _held;
       for (final clip in _clips) {
         if (clip.voice != null) _backend.pause(clip.voice!, false);
       }
@@ -325,9 +338,7 @@ class AdaptiveMusicPlayer {
       return;
     }
     _pendingSkip = null;
-    final audible = _clips
-        .where((c) => c.start <= time && c.end > time)
-        .toList();
+    final audible = _audibleAt(time);
     for (final clip in _clips.where((c) => !audible.contains(c))) {
       _stopVoice(clip);
     }
@@ -394,36 +405,57 @@ class AdaptiveMusicPlayer {
   static Future<void> restartEngineWith(Future<void> Function() restart) =>
       _restartEngine(restart);
 
-  static Future<void> _restartEngine(Future<void> Function() restart) =>
-      _restarting ??= () async {
-        try {
-          final players = _live.toList();
-          final gate = Completer<void>();
-          SoloudBackend.restarting = gate.future;
-          Object? failure;
-          StackTrace? trace;
-          try {
-            await Future.wait(players.map((player) => player._suspend()));
-            await restart();
-          } catch (error, stack) {
-            failure = error;
-            trace = stack;
-          } finally {
-            SoloudBackend.restarting = null;
-            gate.complete();
-          }
-          for (final player in players) {
-            await player._restore(failure);
-          }
-          if (failure != null) Error.throwWithStackTrace(failure, trace!);
-        } finally {
-          _restarting = null;
-        }
-      }();
+  static Future<void> _restartEngine(Future<void> Function() restart) {
+    final running = _restarting;
+    if (running != null) {
+      // While players are still being released, the pending engine restart
+      // also covers this request. A reset reported during the rebuild needs
+      // one more pass once that rebuild is done.
+      if (!_restoring) return running;
+      return _queued ??= running.catchError((Object _) {}).then((_) {
+        _queued = null;
+        return _restartEngine(restart);
+      });
+    }
+    final cycle = Completer<void>();
+    _restarting = cycle.future;
+    cycle.complete(_runRestart(restart));
+    return cycle.future;
+  }
 
-  /// Captures what to rebuild and releases the backend. A load already in
-  /// flight finishes first so its playlist is rebuilt as well; loads started
-  /// afterwards wait for the engine behind [SoloudBackend.restarting].
+  static Future<void> _runRestart(Future<void> Function() restart) async {
+    try {
+      final players = _livePlayers;
+      // Disposals that began before this restart may still hold a bus that
+      // must go before the engine does. Later ones wait on this restart.
+      final disposals = _disposals.toList();
+      final gate = Completer<void>();
+      SoloudBackend.restarting = gate.future;
+      Object? failure;
+      StackTrace? trace;
+      try {
+        await Future.wait(players.map((player) => player._suspend()));
+        await Future.wait(disposals.map((d) => d.catchError((Object _) {})));
+        await restart();
+      } catch (error, stack) {
+        failure = error;
+        trace = stack;
+      } finally {
+        SoloudBackend.restarting = null;
+        gate.complete();
+      }
+      _restoring = true;
+      await Future.wait(players.map((player) => player._restore(failure)));
+      if (failure != null) Error.throwWithStackTrace(failure, trace!);
+    } finally {
+      _restoring = false;
+      _restarting = null;
+    }
+  }
+
+  /// Captures what to rebuild and releases the backend. Never throws. A load
+  /// already in flight finishes first so its playlist is rebuilt as well;
+  /// loads started afterwards wait behind [SoloudBackend.restarting].
   Future<void> _suspend() async {
     final pending = _status == PlaybackStatus.loading ? _loading : null;
     final done = _restartDone = Completer<void>();
@@ -434,8 +466,9 @@ class AdaptiveMusicPlayer {
     } catch (_) {
       /* load reports its own error */
     }
-    if (_disposed) return;
-    if (pending != null) _snapshotForRestart();
+    if (pending != null && !_disposed) _snapshotForRestart();
+    // Release even when disposed meanwhile: the engine goes down next, and a
+    // bus released only afterwards would fail. Disposal then finds nothing.
     try {
       await _backend.dispose();
     } catch (_) {
@@ -447,10 +480,14 @@ class AdaptiveMusicPlayer {
     if (_tracks.isEmpty || _status == PlaybackStatus.failed) {
       _snapshot = null;
     } else {
-      final time = _time;
-      final audible = _clips
-          .where((c) => c.start <= time && c.end > time)
-          .toList();
+      int time;
+      try {
+        time = _time;
+      } catch (_) {
+        // A clock the dead engine cannot report loses the position only.
+        time = _held;
+      }
+      final audible = _audibleAt(time);
       // An overlap in progress resumes with its incoming track only.
       _snapshot = (
         status: _status,
@@ -459,14 +496,10 @@ class AdaptiveMusicPlayer {
       );
       _index = _snapshot!.index;
       _status = PlaybackStatus.loading;
+      _rebuilding = true;
     }
     // Native voices died with the engine; the backend release drops them.
-    _clips.clear();
-    _generation++;
-    _held = 0;
-    _pauseAt = null;
-    _manualFadeEnd = 0;
-    _pendingSkip = null;
+    _clearTimeline();
     if (_snapshot != null) _emit();
   }
 
@@ -509,12 +542,14 @@ class AdaptiveMusicPlayer {
           _emit();
       }
     } catch (error) {
-      if (!_disposed) {
-        _status = PlaybackStatus.failed;
-        _error = error;
-        _emit();
+      _fail(error);
+      try {
+        await _backend.clear();
+      } catch (_) {
+        /* partially decoded sources go with the next load */
       }
     } finally {
+      _rebuilding = false;
       done.complete();
     }
   }
@@ -637,9 +672,7 @@ class AdaptiveMusicPlayer {
         ),
       );
     }
-    final audible = _clips
-        .where((c) => c.start <= time && c.end > time)
-        .toList();
+    final audible = _audibleAt(time);
     if (audible.isNotEmpty) _index = audible.last.index;
     if (_pauseAt != null && _backend.now >= _pauseAt!) {
       _held = time;
@@ -667,18 +700,27 @@ class AdaptiveMusicPlayer {
     math.min(_lengths[a] ~/ 2, _lengths[b] ~/ 2),
   );
   void _resetAt(int index) {
-    _manualFadeEnd = 0;
-    _pendingSkip = null;
     for (final clip in _clips) {
       _stopVoice(clip);
     }
+    _clearTimeline();
+    _index = index;
+    _status = PlaybackStatus.ready;
+  }
+
+  /// Forgets every queued clip and pending transport command. Callers stop or
+  /// release the voices themselves; stop failures from before are ignored.
+  void _clearTimeline() {
+    _manualFadeEnd = 0;
+    _pendingSkip = null;
     _generation++;
     _clips.clear();
     _held = 0;
-    _index = index;
     _pauseAt = null;
-    _status = PlaybackStatus.ready;
   }
+
+  List<_Clip> _audibleAt(int time) =>
+      _clips.where((c) => c.start <= time && c.end > time).toList();
 
   void _stopVoice(_Clip clip) {
     final voice = clip.voice;
@@ -707,9 +749,7 @@ class AdaptiveMusicPlayer {
   void _emit() {
     if (_disposed) return;
     final time = _time;
-    final audible = _clips
-        .where((c) => c.start <= time && c.end > time)
-        .toList();
+    final audible = _audibleAt(time);
     final length = _lengths.isEmpty ? 0 : _lengths[_index];
     final position = _status == PlaybackStatus.completed
         ? length
@@ -747,10 +787,17 @@ class AdaptiveMusicPlayer {
     }
   }
 
-  Future<void> dispose() => _disposing ??= _dispose();
+  Future<void> dispose() {
+    if (_disposing != null) return _disposing!;
+    final disposal = _dispose();
+    _disposals.add(disposal);
+    disposal.whenComplete(() => _disposals.remove(disposal)).ignore();
+    return _disposing = disposal;
+  }
+
   Future<void> _dispose() async {
     _disposed = true;
-    _live.remove(this);
+    _live.removeWhere((ref) => ref.target == null || ref.target == this);
     _timer?.cancel();
     _ducks.clear();
     try {
@@ -758,11 +805,14 @@ class AdaptiveMusicPlayer {
     } catch (_) {
       /* load reports its own error */
     }
-    await _backend.dispose();
-    _clips.clear();
-    _status = PlaybackStatus.disposed;
-    _state = const MusicState(status: PlaybackStatus.disposed);
-    await _events.close();
+    try {
+      await _backend.dispose();
+    } finally {
+      _clips.clear();
+      _status = PlaybackStatus.disposed;
+      _state = const MusicState(status: PlaybackStatus.disposed);
+      await _events.close();
+    }
   }
 }
 

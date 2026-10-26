@@ -169,6 +169,11 @@ class _MusicLabState extends State<MusicLab> with WidgetsBindingObserver {
     });
     try {
       await AdaptiveMusicPlayer.restartEngine();
+      // A background transition during the rebuild found nothing to pause.
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.paused &&
+          _player.state.status == PlaybackStatus.playing) {
+        _player.pause(transition: Duration.zero);
+      }
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {

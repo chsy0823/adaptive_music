@@ -12,6 +12,15 @@ class GatedLoadBackend extends FakeBackend {
   }
 }
 
+class GatedDisposeBackend extends FakeBackend {
+  Completer<void>? gate;
+  @override
+  Future<void> dispose() async {
+    await gate?.future;
+    await super.dispose();
+  }
+}
+
 class FailingReloadBackend extends FakeBackend {
   @override
   Future<Duration> load(MusicTrack track, int index) async {
@@ -19,6 +28,20 @@ class FailingReloadBackend extends FakeBackend {
     if (initializations == 2) throw StateError('decoder unavailable');
     return super.load(track, index);
   }
+}
+
+class FailingReleaseBackend extends FakeBackend {
+  @override
+  Future<void> dispose() async {
+    await super.dispose();
+    if (disposals == 1) throw StateError('bus already gone');
+  }
+}
+
+class BrokenClockBackend extends FakeBackend {
+  bool dead = false;
+  @override
+  int get now => dead ? throw StateError('engine gone') : super.now;
 }
 
 /// Fakes the engine restart: SoLoud's clock begins again from zero.
@@ -30,35 +53,46 @@ Future<void> Function() rebooting(List<FakeBackend> backends, List<int> log) =>
       log.add(backends.first.now);
     };
 
+AdaptiveMusicPlayer player(
+  FakeBackend backend, {
+  TransitionDefaults transitions = const TransitionDefaults.smooth(),
+}) {
+  final player = AdaptiveMusicPlayer.withBackend(
+    backend,
+    transitions: transitions,
+    automaticTick: false,
+  );
+  addTearDown(player.dispose);
+  return player;
+}
+
 void main() {
   const tracks = [
     MusicTrack.asset('a', cueIn: Duration(seconds: 1)),
     MusicTrack.asset('b'),
   ];
+  const immediate = TransitionDefaults.immediate();
 
   test(
     'a playing player resumes its track, position, gains and filter',
     () async {
       final backend = FakeBackend();
-      final player = AdaptiveMusicPlayer.withBackend(
-        backend,
-        transitions: const TransitionDefaults.immediate(),
-        automaticTick: false,
-      );
+      final music = player(backend, transitions: immediate);
       final statuses = <PlaybackStatus>[];
-      final subscription = player.states.listen((s) => statuses.add(s.status));
-      await player.load(
+      final subscription = music.states.listen((s) => statuses.add(s.status));
+      addTearDown(subscription.cancel);
+      await music.load(
         tracks: tracks,
         repeat: MusicRepeatMode.all,
         transition: const TrackTransition.gapless(),
       );
-      player.setVolume(0.5);
-      player.setFilter(const LowPassFilter(cutoffHz: 800));
-      player.requestDucking(gain: 0.3);
-      player.play();
+      music.setVolume(0.5);
+      music.setFilter(const LowPassFilter(cutoffHz: 800));
+      music.requestDucking(gain: 0.3);
+      music.play();
       backend.now = backend.starts.values.first.$2 + 3000000;
-      player.tick();
-      expect(player.state.position, const Duration(seconds: 3));
+      music.tick();
+      expect(music.state.position, const Duration(seconds: 3));
       final restarts = <int>[];
 
       await AdaptiveMusicPlayer.restartEngineWith(
@@ -70,11 +104,11 @@ void main() {
       expect(backend.disposals, 1);
       expect(backend.initializations, 2);
       expect(backend.loads, 4);
-      expect(player.state.status, PlaybackStatus.playing);
-      expect(player.state.index, 0);
-      expect(player.state.position, const Duration(seconds: 3));
-      expect(player.state.duration, const Duration(seconds: 9));
-      expect(player.state.volume, 0.5);
+      expect(music.state.status, PlaybackStatus.playing);
+      expect(music.state.index, 0);
+      expect(music.state.position, const Duration(seconds: 3));
+      expect(music.state.duration, const Duration(seconds: 9));
+      expect(music.state.volume, 0.5);
       expect(backend.lastFilter, isA<LowPassFilter>());
       expect((backend.lastFilter! as LowPassFilter).cutoffHz, 800);
       expect(backend.filterTransition, Duration.zero);
@@ -89,76 +123,62 @@ void main() {
       // Successors are queued relative to the resumed timeline.
       expect(backend.starts.length, 4);
       backend.now = 6000000 + 40000;
-      player.tick();
-      expect(player.state.index, 1);
-      expect(player.state.position, Duration.zero);
-      await subscription.cancel();
-      await player.dispose();
+      music.tick();
+      expect(music.state.index, 1);
+      expect(music.state.position, Duration.zero);
     },
   );
 
   test('a paused player stays paused and resumes from its position', () async {
     final backend = FakeBackend();
-    final player = AdaptiveMusicPlayer.withBackend(
-      backend,
-      transitions: const TransitionDefaults.immediate(),
-      automaticTick: false,
-    );
-    await player.load(tracks: tracks);
-    player.play();
+    final music = player(backend, transitions: immediate);
+    await music.load(tracks: tracks);
+    music.play();
     backend.now = backend.starts.values.first.$2 + 2000000;
-    player.tick();
-    player.pause();
-    player.tick();
-    expect(player.state.status, PlaybackStatus.paused);
+    music.tick();
+    music.pause();
+    music.tick();
+    expect(music.state.status, PlaybackStatus.paused);
 
     await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
 
-    expect(player.state.status, PlaybackStatus.paused);
-    expect(player.state.position, const Duration(seconds: 2));
+    expect(music.state.status, PlaybackStatus.paused);
+    expect(music.state.position, const Duration(seconds: 2));
     expect(backend.starts, isEmpty);
     backend.now = 500000;
-    player.play();
-    expect(player.state.status, PlaybackStatus.playing);
-    expect(player.state.position, const Duration(seconds: 2));
+    music.play();
+    expect(music.state.status, PlaybackStatus.playing);
+    expect(music.state.position, const Duration(seconds: 2));
+    // The restored voice gets the same lead-in as a fresh start.
     final voice = backend.starts.entries.first;
-    expect(voice.value, (0, 500000));
+    expect(voice.value, (0, 540000));
     expect(backend.windows[voice.key], (
       const Duration(seconds: 3),
       const Duration(seconds: 7),
     ));
-    await player.dispose();
   });
 
   test('a pause still fading completes as paused', () async {
     final backend = FakeBackend();
-    final player = AdaptiveMusicPlayer.withBackend(
-      backend,
-      automaticTick: false,
-    );
-    await player.load(tracks: tracks);
-    player.play(transition: Duration.zero);
+    final music = player(backend);
+    await music.load(tracks: tracks);
+    music.play(transition: Duration.zero);
     backend.now = backend.starts.values.first.$2 + 1000000;
-    player.tick();
-    player.pause(transition: const Duration(seconds: 1));
-    expect(player.state.status, PlaybackStatus.pausing);
+    music.tick();
+    music.pause(transition: const Duration(seconds: 1));
+    expect(music.state.status, PlaybackStatus.pausing);
 
     await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
 
-    expect(player.state.status, PlaybackStatus.paused);
-    expect(player.state.position, const Duration(seconds: 1));
-    await player.dispose();
+    expect(music.state.status, PlaybackStatus.paused);
+    expect(music.state.position, const Duration(seconds: 1));
   });
 
   test('ready, completed and empty players keep their status', () async {
     final ready = FakeBackend();
     final completed = FakeBackend();
     final empty = FakeBackend();
-    final players = [
-      AdaptiveMusicPlayer.withBackend(ready, automaticTick: false),
-      AdaptiveMusicPlayer.withBackend(completed, automaticTick: false),
-      AdaptiveMusicPlayer.withBackend(empty, automaticTick: false),
-    ];
+    final players = [player(ready), player(completed), player(empty)];
     await players[0].load(tracks: tracks);
     players[0].skipTo(1);
     await players[1].load(tracks: const [MusicTrack.asset('a')]);
@@ -179,46 +199,45 @@ void main() {
     expect(empty.initializations, 0);
     expect(ready.initializations, 2);
     expect(completed.initializations, 2);
-    for (final player in players) {
-      await player.dispose();
-    }
   });
 
   test('commands and loads are rejected while the engine restarts', () async {
     final backend = FakeBackend();
-    final player = AdaptiveMusicPlayer.withBackend(
-      backend,
-      automaticTick: false,
-    );
-    await player.load(tracks: tracks);
-    player.play(transition: Duration.zero);
+    final music = player(backend);
+    await music.load(tracks: tracks);
+    music.play(transition: Duration.zero);
     final engine = Completer<void>();
     final restart = AdaptiveMusicPlayer.restartEngineWith(() => engine.future);
-    expect(player.state.status, PlaybackStatus.loading);
-    expect(player.play, throwsStateError);
-    expect(player.pause, throwsStateError);
-    expect(() => player.skipTo(1), throwsStateError);
-    expect(() => player.load(tracks: tracks), throwsStateError);
-    player.setVolume(0.2, transition: Duration.zero);
+    expect(music.state.status, PlaybackStatus.loading);
+    expect(music.play, throwsStateError);
+    expect(music.pause, throwsStateError);
+    expect(() => music.skipTo(1), throwsStateError);
+    expect(
+      () => music.load(tracks: tracks),
+      throwsA(
+        isStateError.having(
+          (e) => e.message,
+          'message',
+          contains('restartEngine'),
+        ),
+      ),
+    );
+    music.setVolume(0.2, transition: Duration.zero);
     engine.complete();
     await restart;
-    expect(player.state.status, PlaybackStatus.playing);
-    expect(player.state.volume, 0.2);
+    expect(music.state.status, PlaybackStatus.playing);
+    expect(music.state.volume, 0.2);
     // The default play fade brings the resumed voice up over 500 ms.
     expect(backend.gains.values.first, 0);
     backend.now = 500000;
-    player.tick();
+    music.tick();
     expect(backend.gains.values.first, closeTo(0.2, 1e-9));
-    await player.dispose();
   });
 
   test('concurrent restarts share one engine restart', () async {
     final backend = FakeBackend();
-    final player = AdaptiveMusicPlayer.withBackend(
-      backend,
-      automaticTick: false,
-    );
-    await player.load(tracks: tracks);
+    final music = player(backend);
+    await music.load(tracks: tracks);
     var restarts = 0;
     Future<void> restart() async => restarts++;
     await Future.wait([
@@ -229,16 +248,41 @@ void main() {
     expect(backend.initializations, 2);
     await AdaptiveMusicPlayer.restartEngineWith(restart);
     expect(restarts, 2);
-    await player.dispose();
+  });
+
+  test('a reset reported during the rebuild runs one more pass', () async {
+    final backend = GatedLoadBackend();
+    final music = player(backend, transitions: immediate);
+    await music.load(tracks: tracks);
+    music.play();
+    backend.now = backend.starts.values.first.$2 + 2000000;
+    music.tick();
+    var restarts = 0;
+    Future<void> restart() async {
+      backend.now = 0;
+      restarts++;
+    }
+
+    backend.gate = Completer<void>();
+    final first = AdaptiveMusicPlayer.restartEngineWith(restart);
+    await Future<void>.delayed(Duration.zero);
+    expect(restarts, 1);
+    expect(music.state.status, PlaybackStatus.loading);
+    final second = AdaptiveMusicPlayer.restartEngineWith(restart);
+    backend.gate!.complete();
+    backend.gate = null;
+    await first;
+    await second;
+    expect(restarts, 2);
+    expect(backend.initializations, 3);
+    expect(music.state.status, PlaybackStatus.playing);
+    expect(music.state.position, const Duration(seconds: 2));
   });
 
   test('a load in flight finishes and its playlist is rebuilt', () async {
     final backend = GatedLoadBackend()..gate = Completer<void>();
-    final player = AdaptiveMusicPlayer.withBackend(
-      backend,
-      automaticTick: false,
-    );
-    final load = player.load(tracks: tracks);
+    final music = player(backend);
+    final load = music.load(tracks: tracks);
     final restart = AdaptiveMusicPlayer.restartEngineWith(() async {});
     await Future<void>.delayed(Duration.zero);
     expect(backend.disposals, 0);
@@ -246,40 +290,67 @@ void main() {
     backend.gate = null;
     await load;
     await restart;
-    expect(player.state.status, PlaybackStatus.ready);
-    expect(player.tracks, hasLength(2));
+    expect(music.state.status, PlaybackStatus.ready);
+    expect(music.tracks, hasLength(2));
     expect(backend.disposals, 1);
     expect(backend.loads, 4);
-    await player.dispose();
   });
 
   test('disposal during a restart completes without rebuilding', () async {
     final backend = FakeBackend();
-    final player = AdaptiveMusicPlayer.withBackend(
-      backend,
-      automaticTick: false,
-    );
-    await player.load(tracks: tracks);
-    player.play(transition: Duration.zero);
+    final music = player(backend);
+    await music.load(tracks: tracks);
+    music.play(transition: Duration.zero);
     final engine = Completer<void>();
     final restart = AdaptiveMusicPlayer.restartEngineWith(() => engine.future);
-    final disposal = player.dispose();
+    final disposal = music.dispose();
     engine.complete();
     await restart;
     await disposal;
-    expect(player.state.status, PlaybackStatus.disposed);
+    expect(music.state.status, PlaybackStatus.disposed);
     expect(backend.initializations, 1);
     expect(backend.loads, 2);
+  });
+
+  test('a player disposed as the restart begins releases first', () async {
+    final backend = FakeBackend();
+    final music = player(backend);
+    await music.load(tracks: tracks);
+    music.play(transition: Duration.zero);
+    var releasedBeforeEngine = -1;
+    final restart = AdaptiveMusicPlayer.restartEngineWith(() async {
+      releasedBeforeEngine = backend.disposals;
+    });
+    final disposal = music.dispose();
+    await restart;
+    await disposal;
+    expect(releasedBeforeEngine, 1);
+    expect(music.state.status, PlaybackStatus.disposed);
+    expect(backend.initializations, 1);
+  });
+
+  test('a disposal already in flight finishes before the engine', () async {
+    final backend = GatedDisposeBackend()..gate = Completer<void>();
+    final music = player(backend);
+    await music.load(tracks: tracks);
+    final disposal = music.dispose();
+    var releasedBeforeEngine = -1;
+    final restart = AdaptiveMusicPlayer.restartEngineWith(() async {
+      releasedBeforeEngine = backend.disposals;
+    });
+    await Future<void>.delayed(Duration.zero);
+    expect(releasedBeforeEngine, -1);
+    backend.gate!.complete();
+    await disposal;
+    await restart;
+    expect(releasedBeforeEngine, 1);
   });
 
   test('a failed reload reports failure and leaves others playing', () async {
     final failing = FailingReloadBackend();
     final healthy = FakeBackend();
-    final broken = AdaptiveMusicPlayer.withBackend(
-      failing,
-      automaticTick: false,
-    );
-    final fine = AdaptiveMusicPlayer.withBackend(healthy, automaticTick: false);
+    final broken = player(failing);
+    final fine = player(healthy);
     await broken.load(tracks: tracks);
     await fine.load(tracks: tracks);
     broken.play(transition: Duration.zero);
@@ -294,64 +365,91 @@ void main() {
     expect(fine.state.status, PlaybackStatus.playing);
     await broken.load(tracks: const [MusicTrack.asset('c')]);
     expect(broken.state.status, PlaybackStatus.ready);
-    await broken.dispose();
-    await fine.dispose();
   });
 
   test('an engine restart error fails the rebuilt players', () async {
     final backend = FakeBackend();
-    final player = AdaptiveMusicPlayer.withBackend(
-      backend,
-      automaticTick: false,
-    );
-    await player.load(tracks: tracks);
-    player.play(transition: Duration.zero);
+    final music = player(backend);
+    await music.load(tracks: tracks);
+    music.play(transition: Duration.zero);
     await expectLater(
       AdaptiveMusicPlayer.restartEngineWith(
         () async => throw StateError('engine stuck'),
       ),
       throwsStateError,
     );
-    expect(player.state.status, PlaybackStatus.failed);
-    expect(player.state.error, isStateError);
+    expect(music.state.status, PlaybackStatus.failed);
+    expect(music.state.error, isStateError);
     expect(backend.initializations, 1);
-    await player.dispose();
   });
+
+  test('a backend that fails to release is still rebuilt', () async {
+    final backend = FailingReleaseBackend();
+    final music = player(backend, transitions: immediate);
+    await music.load(tracks: tracks);
+    music.play();
+    backend.now = backend.starts.values.first.$2 + 1000000;
+    music.tick();
+
+    await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+
+    expect(music.state.status, PlaybackStatus.playing);
+    expect(music.state.position, const Duration(seconds: 1));
+    expect(backend.initializations, 2);
+  });
+
+  test(
+    'a clock the dead engine cannot report loses only the position',
+    () async {
+      final backend = BrokenClockBackend();
+      final music = player(backend, transitions: immediate);
+      await music.load(tracks: tracks);
+      music.play();
+      backend.now = backend.starts.values.first.$2 + 2000000;
+      music.tick();
+      backend.dead = true;
+
+      await AdaptiveMusicPlayer.restartEngineWith(() async {
+        backend.dead = false;
+        backend.now = 0;
+      });
+
+      expect(music.state.status, PlaybackStatus.playing);
+      expect(music.state.index, 0);
+      expect(music.state.position, Duration.zero);
+      expect(backend.initializations, 2);
+    },
+  );
 
   test('a crossfade in progress resumes with the incoming track', () async {
     final backend = FakeBackend();
-    final player = AdaptiveMusicPlayer.withBackend(
-      backend,
-      transitions: const TransitionDefaults.immediate(),
-      automaticTick: false,
-    );
-    await player.load(
+    final music = player(backend, transitions: immediate);
+    await music.load(
       tracks: tracks,
       repeat: MusicRepeatMode.all,
       transition: const TrackTransition.crossfade(
         duration: Duration(seconds: 2),
       ),
     );
-    player.play();
+    music.play();
     // Track a's window lasts 9 s; its successor starts 2 s before that end.
     backend.now = backend.starts.values.first.$2 + 8000000;
-    player.tick();
-    expect(player.state.overlapping, isTrue);
-    expect(player.state.index, 1);
-    expect(player.state.position, const Duration(seconds: 1));
+    music.tick();
+    expect(music.state.overlapping, isTrue);
+    expect(music.state.index, 1);
+    expect(music.state.position, const Duration(seconds: 1));
 
     await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
 
-    expect(player.state.status, PlaybackStatus.playing);
-    expect(player.state.overlapping, isFalse);
-    expect(player.state.index, 1);
-    expect(player.state.position, const Duration(seconds: 1));
+    expect(music.state.status, PlaybackStatus.playing);
+    expect(music.state.overlapping, isFalse);
+    expect(music.state.index, 1);
+    expect(music.state.position, const Duration(seconds: 1));
     final voice = backend.starts.entries.first;
     expect(voice.value, (1, 40000));
     expect(backend.windows[voice.key], (
       const Duration(seconds: 1),
       const Duration(seconds: 9),
     ));
-    await player.dispose();
   });
 }
