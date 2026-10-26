@@ -18,5 +18,7 @@ abstract interface class AudioBackend {
   Future<void> stop(int voice);
   void setFilter(MusicFilter? filter, Duration transition);
   Future<void> clear();
+
+  /// Releases every engine resource. A later [initialize] rebuilds them.
   Future<void> dispose();
 }

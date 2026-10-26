@@ -47,6 +47,8 @@ package through a local path dependency.
   gapless playback or hard real-time guarantees.
 - Each player owns its sources and mixing bus. Filters must not affect other
   players, and disposing a player must not shut down the shared SoLoud engine.
+  Only `AdaptiveMusicPlayer.restartEngine()` restarts it, after every live player
+  has released its bus, and it then rebuilds each of them from its own state.
 - Keep native loading and playback registration on the host isolate. The gain
   worker uses SoLoud's public experimental isolate bindings only for mixer control;
   check that boundary when updating the dependency.

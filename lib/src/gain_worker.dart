@@ -25,7 +25,10 @@ class GainWorker {
   void gain(int voice, double value, Duration smoothing) =>
       _commands.send((voice, value, smoothing));
 
+  bool _disposed = false;
+
   Future<void> remove(int voice) async {
+    if (_disposed) return; // The worker's plans went with it; never wait.
     final reply = ReceivePort();
     _commands.send((voice, reply.sendPort));
     await reply.first;
@@ -33,6 +36,8 @@ class GainWorker {
   }
 
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     final reply = ReceivePort();
     _commands.send(reply.sendPort);
     await reply.first;

@@ -12,11 +12,20 @@ class FakeBackend implements AudioBackend {
   final gains = <int, double>{};
   final paused = <int>{};
   int counter = 0;
+  int initializations = 0;
+  int loads = 0;
+  int disposals = 0;
   @override
-  Future<void> initialize() async {}
+  Future<void> initialize() async {
+    initializations++;
+  }
+
   @override
-  Future<Duration> load(MusicTrack track, int index) async =>
-      const Duration(seconds: 10);
+  Future<Duration> load(MusicTrack track, int index) async {
+    loads++;
+    return const Duration(seconds: 10);
+  }
+
   @override
   int schedule(
     int index,
@@ -68,6 +77,7 @@ class FakeBackend implements AudioBackend {
 
   @override
   Future<void> dispose() async {
+    disposals++;
     await clear();
   }
 }
@@ -694,7 +704,8 @@ void main() {
     expect(player.state.status, PlaybackStatus.paused);
     backend.now = 5000000;
     player.play();
-    expect(backend.starts.values.single.$2, backend.now);
+    // The voice was never created, so resume reserves a fresh start's lead-in.
+    expect(backend.starts.values.single.$2, backend.now + 40000);
     expect(player.state.position, Duration.zero);
     await player.dispose();
   });
