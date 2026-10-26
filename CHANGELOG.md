@@ -5,6 +5,19 @@
 - Lazy native-engine initialization so unloaded widgets work in headless tests.
 - Contributor guide and code ownership.
 
+## [0.3.0](https://github.com/chsy0823/adaptive_music/compare/v0.2.0...v0.3.0) (2026-10-26)
+
+
+### Features
+
+* rebuild players after a media services reset ([303d0c8](https://github.com/chsy0823/adaptive_music/commit/303d0c8b91e4d1908a645f3857ede9eabeaac2c6))
+* rebuild players after a media services reset ([26692fe](https://github.com/chsy0823/adaptive_music/commit/26692fede6c1e0d3e2621b2d8a26b803db83ec51))
+
+
+### Bug Fixes
+
+* harden engine restart against disposal and release races ([6547c1e](https://github.com/chsy0823/adaptive_music/commit/6547c1e0e42431ae6693ade5f26374f4b2e80e99))
+
 ## [0.2.0](https://github.com/chsy0823/adaptive_music/compare/v0.1.0...v0.2.0) (2026-09-23)
 
 
