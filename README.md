@@ -222,7 +222,12 @@ share one restart; a reset reported while players are still being rebuilt runs
 one more pass afterwards. A load in flight finishes first and its playlist is rebuilt. A
 crossfade in progress resumes with its incoming track only. A player whose reload
 fails reports `failed`; if the engine itself cannot restart, every rebuilt player
-fails and the returned future completes with that error.
+fails and the returned future completes with that error. Either way the player
+keeps its playlist and position, and the next `restartEngine()` rebuilds it from
+them again; a `load()` in between replaces them. iOS can deliver a reset while
+the app is in the background, where the engine cannot start, and another once
+the app returns, so call `restartEngine()` on every reset: the later call
+restores playback. A player that failed while playing is not rebuilt.
 
 In the lab, **Restart audio engine** runs this while music plays; playback should
 continue from the same position with the same tone.
