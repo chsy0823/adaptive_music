@@ -397,9 +397,11 @@ class AdaptiveMusicPlayer {
   /// restart. Reload errors appear as `failed`; an engine restart error fails
   /// every rebuilt player and completes this future with that error. A player
   /// that failed either way keeps its playlist and position, and the next call
-  /// rebuilds it from them again; a `load()` in between replaces them. A reset
-  /// delivered while the app is in the background, where the engine cannot
-  /// start, recovers on the reset that follows the return to the foreground.
+  /// rebuilds it from them again; until then it rejects commands like any
+  /// failed player, and a `load()` replaces them. iOS can deliver a reset
+  /// while the app is in the background, where the engine cannot start, so
+  /// call this again when the app returns if a player is still `failed`.
+  /// A player that failed outside a rebuild is not rebuilt.
   ///
   /// The host observes the platform notification and restores its audio
   /// session before calling this; the library cannot see either.
@@ -484,10 +486,9 @@ class AdaptiveMusicPlayer {
   void _snapshotForRestart() {
     if (_tracks.isEmpty) {
       _snapshot = null;
-    } else if (_status == PlaybackStatus.failed) {
-      // A rebuild that failed left its snapshot behind, so this restart tries
-      // again. A player that failed while playing has nothing to restore.
-    } else {
+    } else if (_status != PlaybackStatus.failed) {
+      // A failed player keeps whatever a failed rebuild left behind, so this
+      // restart tries again; one that failed otherwise has nothing to restore.
       int time;
       try {
         time = _time;
@@ -503,15 +504,15 @@ class AdaptiveMusicPlayer {
         position: audible.isEmpty ? 0 : time - audible.last.start,
       );
     }
+    // Native voices died with the engine; the backend release drops them.
+    _clearTimeline();
     if (_snapshot != null) {
       _index = _snapshot!.index;
       _status = PlaybackStatus.loading;
       _error = null;
       _rebuilding = true;
+      _emit();
     }
-    // Native voices died with the engine; the backend release drops them.
-    _clearTimeline();
-    if (_snapshot != null) _emit();
   }
 
   Future<void> _restore(Object? engineError) async {
@@ -521,9 +522,10 @@ class AdaptiveMusicPlayer {
     try {
       if (_disposed || snapshot == null) return;
       if (engineError != null) {
-        _fail(engineError);
+        _fail(engineError); // The snapshot stays for the next restart.
         return;
       }
+      _snapshot = null;
       _lengths = await _decode(_tracks);
       if (_disposed) return;
       // The restarted engine's clock begins again; re-anchor every envelope.
@@ -551,10 +553,9 @@ class AdaptiveMusicPlayer {
           _status = snapshot.status;
           _emit();
       }
-      // Rebuilt. A failure before this point keeps the snapshot, so the next
-      // restart rebuilds the player again instead of leaving it failed.
-      _snapshot = null;
     } catch (error) {
+      // Keep the snapshot so the next restart rebuilds the player again.
+      _snapshot = snapshot;
       _fail(error);
       try {
         await _backend.clear();
@@ -766,6 +767,8 @@ class AdaptiveMusicPlayer {
     final length = _lengths.isEmpty ? 0 : _lengths[_index];
     final position = _status == PlaybackStatus.completed
         ? length
+        : _snapshot != null
+        ? _snapshot!.position
         : audible.isEmpty
         ? 0
         : time - audible.last.start;
