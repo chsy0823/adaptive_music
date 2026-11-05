@@ -1,6 +1,8 @@
 import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:adaptive_music/adaptive_music.dart';
+
 import 'player_test.dart' show FakeBackend;
 
 class GatedLoadBackend extends FakeBackend {
@@ -42,6 +44,26 @@ class BrokenClockBackend extends FakeBackend {
   bool dead = false;
   @override
   int get now => dead ? throw StateError('engine gone') : super.now;
+}
+
+/// Fails the first rebuild, like iOS refusing to start the engine while the
+/// app is in the background; every other initialization succeeds.
+class FailingInitBackend extends FakeBackend {
+  Completer<void>? gate;
+  @override
+  Future<void> initialize() async {
+    await super.initialize();
+    await gate?.future;
+    if (initializations == 2) throw StateError('backend not inited');
+  }
+}
+
+class FailingStopBackend extends FakeBackend {
+  @override
+  Future<void> stop(int voice) async {
+    await super.stop(voice);
+    throw StateError('voice gone');
+  }
 }
 
 /// Fakes the engine restart: SoLoud's clock begins again from zero.
@@ -451,5 +473,220 @@ void main() {
       const Duration(seconds: 1),
       const Duration(seconds: 9),
     ));
+  });
+
+  test(
+    'a player whose engine failed to start is rebuilt by the next restart',
+    () async {
+      final backend = FailingInitBackend();
+      final music = player(backend, transitions: immediate);
+      await music.load(tracks: tracks, repeat: MusicRepeatMode.all);
+      music.setVolume(0.5);
+      music.setFilter(const LowPassFilter(cutoffHz: 800));
+      music.play();
+      backend.now = backend.starts.values.first.$2 + 2000000;
+      music.tick();
+
+      await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+
+      expect(music.state.status, PlaybackStatus.failed);
+      expect(music.state.error, isStateError);
+      expect(backend.initializations, 2);
+      final statuses = <PlaybackStatus>[];
+      final subscription = music.states.listen((s) => statuses.add(s.status));
+      addTearDown(subscription.cancel);
+
+      await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+
+      expect(statuses, contains(PlaybackStatus.loading));
+      expect(music.state.status, PlaybackStatus.playing);
+      expect(music.state.error, isNull);
+      expect(music.state.index, 0);
+      expect(music.state.position, const Duration(seconds: 2));
+      expect(music.state.volume, 0.5);
+      expect((backend.lastFilter! as LowPassFilter).cutoffHz, 800);
+      expect(backend.initializations, 3);
+      expect(backend.loads, 4);
+      final first = backend.starts.entries.first;
+      expect(first.value, (0, 40000));
+      expect(backend.windows[first.key], (
+        const Duration(seconds: 3),
+        const Duration(seconds: 7),
+      ));
+    },
+  );
+
+  test(
+    'a failed rebuild reports the position the retry resumes from',
+    () async {
+      final backend = FailingInitBackend();
+      final music = player(backend, transitions: immediate);
+      await music.load(tracks: tracks);
+      music.play();
+      backend.now = backend.starts.values.first.$2 + 2000000;
+      music.tick();
+
+      await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+
+      expect(music.state.status, PlaybackStatus.failed);
+      expect(music.state.index, 0);
+      expect(music.state.position, const Duration(seconds: 2));
+      expect(music.state.duration, const Duration(seconds: 9));
+      backend.gate = Completer<void>();
+      final retry = AdaptiveMusicPlayer.restartEngineWith(
+        rebooting([backend], []),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(music.state.status, PlaybackStatus.loading);
+      expect(music.state.error, isNull);
+      expect(music.state.position, const Duration(seconds: 2));
+      backend.gate!.complete();
+      backend.gate = null;
+      await retry;
+      expect(music.state.status, PlaybackStatus.playing);
+      expect(music.state.position, const Duration(seconds: 2));
+    },
+  );
+
+  test(
+    'a reset reported during a failing rebuild retries in the queued pass',
+    () async {
+      final backend = FailingInitBackend();
+      final music = player(backend, transitions: immediate);
+      final statuses = <PlaybackStatus>[];
+      final subscription = music.states.listen((s) => statuses.add(s.status));
+      addTearDown(subscription.cancel);
+      await music.load(tracks: tracks);
+      music.play();
+      backend.now = backend.starts.values.first.$2 + 2000000;
+      music.tick();
+      var restarts = 0;
+      Future<void> restart() async {
+        backend.now = 0;
+        restarts++;
+      }
+
+      backend.gate = Completer<void>();
+      final first = AdaptiveMusicPlayer.restartEngineWith(restart);
+      await Future<void>.delayed(Duration.zero);
+      expect(restarts, 1);
+      final second = AdaptiveMusicPlayer.restartEngineWith(restart);
+      backend.gate!.complete();
+      backend.gate = null;
+      await first;
+      await second;
+
+      expect(restarts, 2);
+      expect(backend.initializations, 3);
+      expect(statuses, contains(PlaybackStatus.failed));
+      expect(music.state.status, PlaybackStatus.playing);
+      expect(music.state.error, isNull);
+      expect(music.state.position, const Duration(seconds: 2));
+    },
+  );
+
+  test(
+    'a paused player whose rebuild failed stays paused after the retry',
+    () async {
+      final backend = FailingInitBackend();
+      final music = player(backend, transitions: immediate);
+      await music.load(tracks: tracks);
+      music.play();
+      backend.now = backend.starts.values.first.$2 + 2000000;
+      music.tick();
+      music.pause();
+      music.tick();
+      expect(music.state.status, PlaybackStatus.paused);
+
+      await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+      expect(music.state.status, PlaybackStatus.failed);
+      await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+
+      expect(music.state.status, PlaybackStatus.paused);
+      expect(music.state.position, const Duration(seconds: 2));
+      expect(backend.starts, isEmpty);
+      music.play();
+      expect(music.state.position, const Duration(seconds: 2));
+    },
+  );
+
+  test('a failed reload is retried by the next restart', () async {
+    final backend = FailingReloadBackend();
+    final music = player(backend, transitions: immediate);
+    await music.load(tracks: tracks);
+    music.play();
+    backend.now = backend.starts.values.first.$2 + 1000000;
+    music.tick();
+
+    await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+    expect(music.state.status, PlaybackStatus.failed);
+    await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+
+    expect(music.state.status, PlaybackStatus.playing);
+    expect(music.state.position, const Duration(seconds: 1));
+    expect(backend.initializations, 3);
+  });
+
+  test('an engine restart error is retried by the next restart', () async {
+    final backend = FakeBackend();
+    final music = player(backend, transitions: immediate);
+    await music.load(tracks: tracks);
+    music.play();
+    backend.now = backend.starts.values.first.$2 + 1000000;
+    music.tick();
+    await expectLater(
+      AdaptiveMusicPlayer.restartEngineWith(
+        () async => throw StateError('engine stuck'),
+      ),
+      throwsStateError,
+    );
+    expect(music.state.status, PlaybackStatus.failed);
+
+    await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+
+    expect(music.state.status, PlaybackStatus.playing);
+    expect(music.state.error, isNull);
+    expect(music.state.position, const Duration(seconds: 1));
+    expect(backend.initializations, 2);
+  });
+
+  test(
+    'a load after a failed rebuild replaces what the next restart rebuilds',
+    () async {
+      final backend = FailingInitBackend();
+      final music = player(backend, transitions: immediate);
+      await music.load(tracks: tracks);
+      music.play();
+      backend.now = backend.starts.values.first.$2 + 1000000;
+      music.tick();
+      await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+      expect(music.state.status, PlaybackStatus.failed);
+
+      await music.load(tracks: const [MusicTrack.asset('c')]);
+      expect(music.state.status, PlaybackStatus.ready);
+      await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+
+      expect(music.state.status, PlaybackStatus.ready);
+      expect(music.tracks, hasLength(1));
+      expect(music.state.position, Duration.zero);
+      expect(backend.starts, isEmpty);
+      expect(backend.initializations, 4);
+    },
+  );
+
+  test('a player that failed while playing is not rebuilt', () async {
+    final backend = FailingStopBackend();
+    final music = player(backend, transitions: immediate);
+    await music.load(tracks: tracks);
+    music.play();
+    music.skipTo(1, transition: const TrackTransition.gapless());
+    await Future<void>.delayed(Duration.zero);
+    expect(music.state.status, PlaybackStatus.failed);
+
+    await AdaptiveMusicPlayer.restartEngineWith(rebooting([backend], []));
+
+    expect(music.state.status, PlaybackStatus.failed);
+    expect(music.state.error, isStateError);
+    expect(backend.initializations, 1);
   });
 }
