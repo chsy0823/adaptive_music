@@ -5,6 +5,15 @@
 - Lazy native-engine initialization so unloaded widgets work in headless tests.
 - Contributor guide and code ownership.
 
+## [0.3.1](https://github.com/chsy0823/adaptive_music/compare/v0.3.0...v0.3.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* report the position a pending rebuild retry resumes from ([18fbde2](https://github.com/chsy0823/adaptive_music/commit/18fbde276220aefefec4b9e33d2671e9647a81a5))
+* retry a failed rebuild on the next engine restart ([a2c0afd](https://github.com/chsy0823/adaptive_music/commit/a2c0afd082f4439a82adbef089ca2ee99db0dd54))
+* retry a failed rebuild on the next engine restart ([5756c64](https://github.com/chsy0823/adaptive_music/commit/5756c64f76eb158023019b6bbcc32a0e6f49ccfb))
+
 ## [0.3.0](https://github.com/chsy0823/adaptive_music/compare/v0.2.0...v0.3.0) (2026-10-26)
 
 
